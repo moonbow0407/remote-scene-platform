@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# 环境与密钥（本地配置不入库）
+.env
+
+# 构建产物
+dist/
+build/
+*.egg-info/
+
+# 运行数据（不得提交数据库或对象存储数据目录）
+pgdata/
+miniodata/
+
+# IDE
+.idea/
+.vscode/

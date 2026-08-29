@@ -1,0 +1,55 @@
+[project]
+name = "remote-scene-platform"
+version = "0.1.0"
+description = "多源遥感数据共享平台后端（Python 迁移版，模块化单体）"
+requires-python = ">=3.12"
+dependencies = [
+    "pydantic>=2.8",
+    "pydantic-settings>=2.4",
+    "sqlalchemy>=2.0.30",
+    "psycopg[binary]>=3.2",
+    "geoalchemy2>=0.15",
+    "alembic>=1.13",
+    "uuid-utils>=0.9",
+    "prometheus-client>=0.20",
+]
+
+[dependency-groups]
+# API 镜像依赖组：保持轻量，不安装 GDAL 与科学计算栈（架构边界）。
+# celery 仅被 Dispatcher 进程用于协议正确的任务发布（纯 Python，无原生依赖）。
+api = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "boto3>=1.34",
+    "httpx>=0.27",
+    "celery>=5.4",
+]
+# Geo Worker 依赖组：基线地理处理栈（GDAL 由镜像层提供）
+worker = [
+    "celery>=5.4",
+    "boto3>=1.34",
+    "rasterio>=1.3",
+    "shapely>=2.0",
+    "pyproj>=3.6",
+    "numpy>=2.0",
+]
+dev = [
+    "pytest>=8.2",
+    "httpx>=0.27",
+    "ruff>=0.6",
+    "pyright>=1.1.375",
+    "pyshp>=2.3",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/app"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "integration: 需要显式提供真实基础设施的高风险边界测试",
+]

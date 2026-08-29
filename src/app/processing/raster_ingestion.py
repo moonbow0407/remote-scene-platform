@@ -1,0 +1,444 @@
+"""栅格入库流水线：验证 → 哈希去重 → 元数据检查 → COG → 缩略图 → footprint → 完成。
+
+幂等约定：每个步骤先查数据库/对象现状，已完成的工作直接跳过；
+每步使用独立数据库事务，部分进度在重试/重投递时保留，不产生重复工件。
+
+资源约定（AGENTS.md §7）：源文件下载到每任务独立临时目录，绝不整载入内存；
+开始前检查临时空间是否满足 源文件 × 倍数 的占用要求。
+"""
+
+import hashlib
+import logging
+import shutil
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+from uuid import UUID
+
+import rasterio
+from geoalchemy2 import WKTElement
+from pyproj import Transformer
+from rasterio.crs import CRS
+from rasterio.enums import Resampling
+from rasterio.shutil import copy as rio_copy
+
+from app.assets.enums import ArtifactKind, AssetVersionStatus
+from app.assets.service import AssetService
+from app.db import session_scope
+from app.jobs.enums import JobStatus
+from app.jobs.service import JobService
+from app.processing.errors import DeterministicError, NeedsInputError, TransientError
+from app.processing.render_profile import infer_render_profile
+from app.settings import Settings
+from app.uploads.minio import MinioAdapter
+
+logger = logging.getLogger(__name__)
+
+_TIFF_MAGICS = (b"II*\x00", b"MM\x00*")
+_THUMBNAIL_MAX_SIDE = 512
+
+
+@dataclass
+class IngestionContext:
+    job_id: UUID
+    version_id: UUID
+    source_object_key: str
+    source_size_bytes: int
+    tmp_dir: Path
+
+    @property
+    def source_path(self) -> Path:
+        return self.tmp_dir / "source"
+
+    @property
+    def cog_path(self) -> Path:
+        return self.tmp_dir / "cog.tif"
+
+    @property
+    def thumbnail_path(self) -> Path:
+        return self.tmp_dir / "thumbnail.png"
+
+
+class RasterIngestion:
+    """一次任务运行内的流水线执行器；每步独立数据库事务。"""
+
+    def __init__(self, *, settings: Settings, minio: MinioAdapter, engine: Any) -> None:
+        self._settings = settings
+        self._minio = minio
+        self._engine = engine
+
+    def run(self, ctx: IngestionContext) -> None:
+        self._preflight(ctx)
+        self._step_validate(ctx)
+        self._step_hash_dedup(ctx)
+        self._step_inspect(ctx)
+        self._step_create_cog(ctx)
+        self._step_thumbnail(ctx)
+        self._step_footprint(ctx)
+        self._step_finalize(ctx)
+
+    # ---- 步骤实现 ----
+
+    def _step_validate(self, ctx: IngestionContext) -> None:
+        """校验对象存在、大小一致且为 TIFF；非 TIFF 属确定性错误。"""
+        stat = self._minio.head_object(key=ctx.source_object_key)
+        if stat is None:
+            raise DeterministicError(
+                "SOURCE_OBJECT_MISSING", f"源对象不存在：{ctx.source_object_key}"
+            )
+        if stat["size"] != ctx.source_size_bytes:
+            raise DeterministicError(
+                "SOURCE_SIZE_MISMATCH",
+                f"源对象大小 {stat['size']} 与登记大小 {ctx.source_size_bytes} 不一致",
+            )
+        magic = self._minio.read_head_bytes(key=ctx.source_object_key, length=4)
+        if magic not in _TIFF_MAGICS:
+            raise DeterministicError(
+                "UNSUPPORTED_FORMAT",
+                f"文件魔数 {magic!r} 不是 GeoTIFF；首版仅支持栅格 TIFF 输入",
+            )
+        self._record_step(ctx, "validate")
+
+    def _step_hash_dedup(self, ctx: IngestionContext) -> None:
+        """流式下载并计算 SHA-256，按内容寻址落位或复用既有 blob。"""
+        with session_scope(self._engine) as session:
+            assets = AssetService(session)
+            version = assets.get_version_by_id(ctx.version_id)
+            if version is None:
+                raise DeterministicError("VERSION_MISSING", f"资产版本不存在：{ctx.version_id}")
+            if version.blob_id is not None:
+                assert version.blob is not None
+                canonical_key = version.blob.object_key
+                if self._minio.head_object(key=canonical_key) is None:
+                    source_stat = self._minio.head_object(key=ctx.source_object_key)
+                    if source_stat is None:
+                        raise DeterministicError(
+                            "BLOB_OBJECT_MISSING",
+                            f"版本已绑定 blob，但规范对象与上传源对象均不存在：{canonical_key}",
+                        )
+                    ctx.tmp_dir.mkdir(parents=True, exist_ok=True)
+                    self._minio.download_to_file(
+                        key=ctx.source_object_key, local_path=str(ctx.source_path)
+                    )
+                    self._minio.upload_file(
+                        local_path=str(ctx.source_path),
+                        key=canonical_key,
+                        content_type="image/tiff",
+                    )
+                assets.upsert_artifact(
+                    version_id=ctx.version_id,
+                    kind=ArtifactKind.ORIGINAL,
+                    object_key=canonical_key,
+                    size_bytes=version.blob.size_bytes,
+                    content_type="image/tiff",
+                )
+                logger.info("版本已绑定且已验证 blob", extra={"version_id": str(ctx.version_id)})
+                self._record_step(ctx, "hash_dedup")
+                return
+
+        digest = hashlib.sha256()
+        size = 0
+        ctx.tmp_dir.mkdir(parents=True, exist_ok=True)
+        with open(ctx.source_path, "wb") as f:
+            for chunk in self._minio.stream_download(key=ctx.source_object_key):
+                f.write(chunk)
+                digest.update(chunk)
+                size += len(chunk)
+        sha = digest.hexdigest()
+        canonical_key = f"original/{sha[:2]}/{sha[2:4]}/{sha}"
+
+        # 对象先可靠落位，再提交数据库引用；失败时最多留下可清理的无引用对象，
+        # 绝不能留下指向不存在对象的 READY 版本。upload_file 对大对象使用托管 Multipart。
+        if self._minio.head_object(key=canonical_key) is None:
+            self._minio.upload_file(
+                local_path=str(ctx.source_path), key=canonical_key, content_type="image/tiff"
+            )
+
+        with session_scope(self._engine) as session:
+            assets = AssetService(session)
+            blob, created = assets.get_or_create_blob(
+                sha256=sha, size_bytes=size, object_key=canonical_key
+            )
+            version = assets.get_version_by_id(ctx.version_id)
+            assert version is not None
+            assets.attach_blob(version, blob)
+            assets.upsert_artifact(
+                version_id=ctx.version_id,
+                kind=ArtifactKind.ORIGINAL,
+                object_key=canonical_key,
+                size_bytes=size,
+                content_type="image/tiff",
+            )
+
+        if created:
+            logger.info("新内容寻址对象已落位", extra={"sha256": sha, "key": canonical_key})
+        else:
+            logger.info("命中内容去重，复用既有 blob", extra={"sha256": sha})
+        # 内容已由 canonical 键持有，清理会话临时对象（尽力而为）
+        try:
+            self._minio.delete_object(key=ctx.source_object_key)
+        except Exception:
+            logger.warning("会话对象清理失败，等待后续清理", extra={"key": ctx.source_object_key})
+        self._record_step(ctx, "hash_dedup")
+
+    def _step_inspect(self, ctx: IngestionContext) -> None:
+        """读取栅格元数据并检查 CRS；缺失且未补充时抛 NeedsInputError（不落变更）。"""
+        self._ensure_source_local(ctx)
+        with session_scope(self._engine) as session:
+            assets = AssetService(session)
+            version = assets.get_version_by_id(ctx.version_id)
+            assert version is not None
+            ext = assets.get_raster_ext(ctx.version_id)
+            user_crs = ext.user_crs if ext is not None else None
+            with rasterio.open(ctx.source_path) as dataset:
+                src_crs = dataset.crs
+                if src_crs is None and user_crs is None:
+                    raise NeedsInputError(
+                        reason="MISSING_CRS",
+                        detail="源文件缺少 CRS 且未提供补充信息；"
+                        "请提交 EPSG 代码后从断点继续，无需重新上传",
+                    )
+                if src_crs is not None:
+                    effective_crs = src_crs
+                else:
+                    try:
+                        effective_crs = CRS.from_user_input(user_crs)
+                    except Exception as exc:
+                        raise NeedsInputError(
+                            reason="INVALID_CRS",
+                            detail=f"补充的 CRS {user_crs!r} 无法解析，请提供有效 EPSG 代码",
+                        ) from exc
+                profile = infer_render_profile(dataset.count)
+                bands = []
+                for idx in range(1, dataset.count + 1):
+                    stats = dataset.statistics(idx, approx=True)
+                    bands.append(
+                        {
+                            "index": idx,
+                            "name": dataset.descriptions[idx - 1],
+                            "dtype": dataset.dtypes[idx - 1],
+                            "min": stats.min,
+                            "max": stats.max,
+                            "mean": stats.mean,
+                        }
+                    )
+                transform = dataset.transform
+                assets.upsert_raster_ext(
+                    ctx.version_id,
+                    crs=str(effective_crs),
+                    width=dataset.width,
+                    height=dataset.height,
+                    band_count=dataset.count,
+                    bands=bands,
+                    resolution_x=abs(transform.a),
+                    resolution_y=abs(transform.e),
+                    nodata=dataset.nodata,
+                    render_profile=dict(profile),
+                )
+            if version.status is AssetVersionStatus.VALIDATING:
+                assets.set_version_status(version, AssetVersionStatus.PROCESSING)
+        self._record_step(ctx, "inspect")
+
+    def _step_create_cog(self, ctx: IngestionContext) -> None:
+        """生成保留源 CRS 的 COG；用户补充 CRS 时在副本上指派（不做重投影）。"""
+        with session_scope(self._engine) as session:
+            assets = AssetService(session)
+            existing = assets.find_artifact(ctx.version_id, ArtifactKind.COG)
+            if (
+                existing is not None
+                and self._minio.head_object(key=existing.object_key) is not None
+            ):
+                logger.info("COG 工件已存在，跳过", extra={"version_id": str(ctx.version_id)})
+                self._record_step(ctx, "create_cog")
+                return
+            ext = assets.get_raster_ext(ctx.version_id)
+            user_crs = ext.user_crs if ext is not None else None
+
+        self._ensure_source_local(ctx)
+        cog_tmp = ctx.cog_path
+        rio_copy(
+            str(ctx.source_path), str(cog_tmp), driver="COG", compress="DEFLATE", blocksize=512
+        )
+        with rasterio.open(ctx.source_path) as src:
+            source_has_crs = src.crs is not None
+        if user_crs and not source_has_crs:
+            # 源文件无地理参考：把用户补充的 CRS 指派到 COG（不做重投影）
+            with rasterio.open(cog_tmp, "r+") as dataset:
+                dataset.crs = CRS.from_user_input(user_crs)
+        cog_key = f"artifacts/{ctx.version_id}/cog.tif"
+        content_type = "image/tiff; profile=cloud-optimized"
+        self._minio.upload_file(local_path=str(cog_tmp), key=cog_key, content_type=content_type)
+        with session_scope(self._engine) as session:
+            assets = AssetService(session)
+            assets.upsert_artifact(
+                version_id=ctx.version_id,
+                kind=ArtifactKind.COG,
+                object_key=cog_key,
+                size_bytes=cog_tmp.stat().st_size,
+                content_type=content_type,
+            )
+        self._record_step(ctx, "create_cog")
+
+    def _step_thumbnail(self, ctx: IngestionContext) -> None:
+        """按渲染推断生成 PNG 缩略图（重采样 + 逐波段线性拉伸）。"""
+        with session_scope(self._engine) as session:
+            assets = AssetService(session)
+            existing = assets.find_artifact(ctx.version_id, ArtifactKind.THUMBNAIL)
+            if (
+                existing is not None
+                and self._minio.head_object(key=existing.object_key) is not None
+            ):
+                self._record_step(ctx, "thumbnail")
+                return
+            ext = assets.get_raster_ext(ctx.version_id)
+            if ext is None or ext.render_profile is None:
+                raise TransientError("RENDER_PROFILE_MISSING")
+            profile = dict(ext.render_profile)
+            nodata = ext.nodata
+
+        self._ensure_cog_local(ctx)
+        bands = [int(b) for b in profile["bands"]]
+        mode = profile["mode"]
+        with rasterio.open(ctx.cog_path) as src:
+            scale = _THUMBNAIL_MAX_SIDE / max(src.width, src.height)
+            out_h = max(1, round(src.height * scale))
+            out_w = max(1, round(src.width * scale))
+            read_idx = [min(b, src.count) for b in bands]
+            data = src.read(
+                read_idx, out_shape=(len(read_idx), out_h, out_w), resampling=Resampling.bilinear
+            )
+            out_bands = []
+            for band_data in data:
+                finite = band_data[band_data != nodata] if nodata is not None else band_data
+                low = float(finite.min()) if finite.size else 0.0
+                high = float(finite.max()) if finite.size else 1.0
+                span = (high - low) or 1.0
+                stretched = (
+                    ((band_data.astype("float32") - low) / span * 255).clip(0, 255).astype("uint8")
+                )
+                out_bands.append(stretched)
+            thumbnail = ctx.thumbnail_path
+            if mode == "grayscale" or len(out_bands) == 1:
+                with rasterio.open(
+                    thumbnail, "w", driver="PNG", height=out_h, width=out_w, count=1, dtype="uint8"
+                ) as dst:
+                    dst.write(out_bands[0], 1)
+            else:
+                count = min(3, len(out_bands))
+                with rasterio.open(
+                    thumbnail,
+                    "w",
+                    driver="PNG",
+                    height=out_h,
+                    width=out_w,
+                    count=count,
+                    dtype="uint8",
+                ) as dst:
+                    for i in range(count):
+                        dst.write(out_bands[i], i + 1)
+        thumb_key = f"artifacts/{ctx.version_id}/thumbnail.png"
+        self._minio.upload_file(local_path=str(thumbnail), key=thumb_key, content_type="image/png")
+        with session_scope(self._engine) as session:
+            assets = AssetService(session)
+            assets.upsert_artifact(
+                version_id=ctx.version_id,
+                kind=ArtifactKind.THUMBNAIL,
+                object_key=thumb_key,
+                size_bytes=thumbnail.stat().st_size,
+                content_type="image/png",
+            )
+        self._record_step(ctx, "thumbnail")
+
+    def _step_footprint(self, ctx: IngestionContext) -> None:
+        """计算 EPSG:4326 footprint（bbox 多边形）与结构化 bbox 列。"""
+        with session_scope(self._engine) as session:
+            assets = AssetService(session)
+            ext = assets.get_raster_ext(ctx.version_id)
+            if ext is None or ext.footprint is not None or ext.crs is None:
+                self._record_step(ctx, "footprint")
+                return
+            crs_text = ext.crs
+        self._ensure_source_local(ctx)
+        with rasterio.open(ctx.source_path) as src:
+            bounds = src.bounds
+        transformer = Transformer.from_crs(crs_text, "EPSG:4326", always_xy=True)
+        min_x, min_y, max_x, max_y = transformer.transform_bounds(
+            bounds.left, bounds.bottom, bounds.right, bounds.top, densify_pts=21
+        )
+        wkt = (
+            f"POLYGON(({min_x!r} {min_y!r}, {max_x!r} {min_y!r}, "
+            f"{max_x!r} {max_y!r}, {min_x!r} {max_y!r}, {min_x!r} {min_y!r}))"
+        )
+        with session_scope(self._engine) as session:
+            assets = AssetService(session)
+            assets.upsert_raster_ext(
+                ctx.version_id,
+                footprint=WKTElement(wkt, srid=4326),
+                min_x=min_x,
+                min_y=min_y,
+                max_x=max_x,
+                max_y=max_y,
+            )
+        self._record_step(ctx, "footprint")
+
+    def _step_finalize(self, ctx: IngestionContext) -> None:
+        with session_scope(self._engine) as session:
+            assets = AssetService(session)
+            jobs = JobService(session)
+            version = assets.get_version_by_id(ctx.version_id)
+            assert version is not None
+            cog = assets.find_artifact(ctx.version_id, ArtifactKind.COG)
+            thumb = assets.find_artifact(ctx.version_id, ArtifactKind.THUMBNAIL)
+            if cog is None or thumb is None:
+                raise DeterministicError("ARTIFACTS_MISSING", "完成前缺少 COG 或缩略图工件")
+            if version.status is not AssetVersionStatus.READY:
+                assets.set_version_status(version, AssetVersionStatus.READY)
+            job = jobs.get(ctx.job_id)
+            if job is not None and job.status is not JobStatus.SUCCEEDED:
+                jobs.transition(job, JobStatus.SUCCEEDED, event_type="JOB_SUCCEEDED")
+
+    # ---- 辅助 ----
+
+    def _preflight(self, ctx: IngestionContext) -> None:
+        """临时空间预检：不足时早期失败，避免 GDAL 中途写满磁盘。"""
+        ctx.tmp_dir.mkdir(parents=True, exist_ok=True)
+        usage = shutil.disk_usage(ctx.tmp_dir)
+        required = ctx.source_size_bytes * self._settings.worker_tmp_min_ratio
+        if usage.free < required:
+            raise TransientError(
+                f"临时空间不足：可用 {usage.free} 字节，任务需要约 {required:.0f} 字节"
+            )
+
+    def _ensure_source_local(self, ctx: IngestionContext) -> Path:
+        if ctx.source_path.exists():
+            return ctx.source_path
+        ctx.tmp_dir.mkdir(parents=True, exist_ok=True)
+        key = ctx.source_object_key
+        with session_scope(self._engine) as session:
+            assets = AssetService(session)
+            version = assets.get_version_by_id(ctx.version_id)
+            assert version is not None
+            if version.blob is not None:
+                key = version.blob.object_key
+        self._minio.download_to_file(key=key, local_path=str(ctx.source_path))
+        return ctx.source_path
+
+    def _ensure_cog_local(self, ctx: IngestionContext) -> Path:
+        if ctx.cog_path.exists():
+            return ctx.cog_path
+        with session_scope(self._engine) as session:
+            assets = AssetService(session)
+            cog = assets.get_artifact_required(ctx.version_id, ArtifactKind.COG)
+            key = cog.object_key
+        self._minio.download_to_file(key=key, local_path=str(ctx.cog_path))
+        return ctx.cog_path
+
+    def _record_step(self, ctx: IngestionContext, step: str) -> None:
+        """步骤完成事件（尽力而为，不影响主流程）。"""
+        try:
+            with session_scope(self._engine) as session:
+                JobService(session).append_event(
+                    ctx.job_id, event_type="STEP_COMPLETED", detail={"step": step}
+                )
+        except Exception:
+            logger.warning("步骤事件记录失败", extra={"step": step, "job_id": str(ctx.job_id)})
