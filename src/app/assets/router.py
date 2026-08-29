@@ -16,6 +16,7 @@ from app.assets.models import AssetVersion
 from app.assets.schemas import (
     ArtifactResponse,
     AssetDetailResponse,
+    AssetUpdateRequest,
     AttachmentExtResponse,
     BBox,
     PropertySchemaItem,
@@ -96,11 +97,7 @@ def upsert_property_schema(
     return PropertySchemaItem(name=row.name, asset_type=row.asset_type, json_schema=row.schema)
 
 
-@router.get("/{asset_id}", response_model=AssetDetailResponse)
-def get_asset(
-    asset_id: UUID, service: Annotated[AssetService, Depends(_service)]
-) -> AssetDetailResponse:
-    asset = service.get_asset_required(asset_id)
+def _asset_detail(service: AssetService, asset: Any) -> AssetDetailResponse:
     current = (
         service.get_version_by_id(asset.current_version_id)
         if asset.current_version_id is not None
@@ -111,10 +108,39 @@ def get_asset(
         name=asset.name,
         asset_type=asset.asset_type,
         source=asset.source,
+        resource_catalog_id=asset.resource_catalog_id,
+        satellite_id=asset.satellite_id,
+        sensor_id=asset.sensor_id,
         properties=asset.properties,
         current_version=_version_summary(current) if current is not None else None,
         created_at=asset.created_at,
     )
+
+
+@router.get("/{asset_id}", response_model=AssetDetailResponse)
+def get_asset(
+    asset_id: UUID, service: Annotated[AssetService, Depends(_service)]
+) -> AssetDetailResponse:
+    return _asset_detail(service, service.get_asset_required(asset_id))
+
+
+@router.patch("/{asset_id}", response_model=AssetDetailResponse)
+def update_asset(
+    asset_id: UUID,
+    body: AssetUpdateRequest,
+    service: Annotated[AssetService, Depends(_service)],
+) -> AssetDetailResponse:
+    get_actor()
+    data = body.model_dump(exclude_unset=True)
+    asset = service.update_asset(
+        asset_id,
+        name=data.get("name"),
+        resource_catalog_id=data.get("resource_catalog_id"),
+        satellite_id=data.get("satellite_id"),
+        sensor_id=data.get("sensor_id"),
+        set_fields=set(data),
+    )
+    return _asset_detail(service, asset)
 
 
 @router.get("/{asset_id}/versions", response_model=Page[VersionSummary])
@@ -249,12 +275,19 @@ def search(
         version_status=body.version_status,
         acquired_from=body.acquired_from,
         acquired_to=body.acquired_to,
+        resource_catalog_id=body.resource_catalog_id,
+        satellite_id=body.satellite_id,
+        sensor_id=body.sensor_id,
+        ecological_parameter_ids=body.ecological_parameter_ids,
         offset=(body.page - 1) * body.page_size,
         limit=body.page_size,
     )
     items = []
     for version, asset in rows:
-        ext = service.get_raster_ext(version.id) or service.get_vector_ext(version.id)
+        ext = None
+        if body.geometry is not None:
+            # 空间检索才读 footprint 扩展；目录过滤不依赖栅格/矢量表。
+            ext = service.get_raster_ext(version.id) or service.get_vector_ext(version.id)
         items.append(
             SearchItem(
                 asset_id=asset.id,
@@ -264,6 +297,9 @@ def search(
                 version_number=version.version_number,
                 status=version.status,
                 acquired_at=version.acquired_at,
+                resource_catalog_id=asset.resource_catalog_id,
+                satellite_id=asset.satellite_id,
+                sensor_id=asset.sensor_id,
                 bbox=_bbox_of(ext),
             )
         )

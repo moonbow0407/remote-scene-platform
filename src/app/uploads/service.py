@@ -91,6 +91,9 @@ class UploadService:
         properties: dict[str, Any],
         source: AssetSource,
         asset_id: UUID | None = None,
+        resource_catalog_id: UUID | None = None,
+        satellite_id: UUID | None = None,
+        sensor_id: UUID | None = None,
     ) -> tuple[UploadSession, list[dict[str, Any]]]:
         """创建逻辑资产（或追加到已有资产）+ 上传会话，并生成全部分片预签名 URL。"""
         if asset_type not in (AssetType.RASTER, AssetType.VECTOR, AssetType.ATTACHMENT):
@@ -106,9 +109,33 @@ class UploadService:
                 raise validation_error(
                     f"不能把 {asset_type.value} 文件追加到 {asset.asset_type.value} 资产 {asset_id}"
                 )
+            if any(v is not None for v in (resource_catalog_id, satellite_id, sensor_id)):
+                assigned = {
+                    name
+                    for name, value in (
+                        ("resource_catalog_id", resource_catalog_id),
+                        ("satellite_id", satellite_id),
+                        ("sensor_id", sensor_id),
+                    )
+                    if value is not None
+                }
+                self._assets.update_asset(
+                    asset.id,
+                    resource_catalog_id=resource_catalog_id,
+                    satellite_id=satellite_id,
+                    sensor_id=sensor_id,
+                    set_fields=assigned,
+                )
+                asset = self._assets.get_asset_required(asset.id)
         else:
             asset = self._assets.create_asset(
-                name=asset_name, asset_type=asset_type, source=source, properties=properties
+                name=asset_name,
+                asset_type=asset_type,
+                source=source,
+                properties=properties,
+                resource_catalog_id=resource_catalog_id,
+                satellite_id=satellite_id,
+                sensor_id=sensor_id,
             )
         session = UploadSession(
             id=session_id,

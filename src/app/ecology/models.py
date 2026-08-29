@@ -51,9 +51,7 @@ class EcologicalParameter(Base, TimestampMixin):
         sa.Uuid, nullable=True, comment="鉴权预留：创建者"
     )
 
-    __table_args__ = (
-        sa.Index("ix_ecological_parameter_parent_sort", "parent_id", "sort_order"),
-    )
+    __table_args__ = (sa.Index("ix_ecological_parameter_parent_sort", "parent_id", "sort_order"),)
 
 
 class EcologicalParameterResourceMapping(Base):
@@ -66,14 +64,12 @@ class EcologicalParameterResourceMapping(Base):
         sa.Uuid,
         ForeignKey("ecological_parameter.id", ondelete="RESTRICT"),
         nullable=False,
-        index=True,
         comment="生态参数主键",
     )
     resource_catalog_id: Mapped[UUID] = mapped_column(
         sa.Uuid,
         ForeignKey("resource_catalog.id", ondelete="RESTRICT"),
         nullable=False,
-        index=True,
         comment="资源目录主键",
     )
     created_at: Mapped[datetime] = mapped_column(
@@ -86,4 +82,6 @@ class EcologicalParameterResourceMapping(Base):
             "resource_catalog_id",
             name="uq_eco_param_resource_mapping",
         ),
+        sa.Index("ix_eco_mapping_parameter_id", "ecological_parameter_id"),
+        sa.Index("ix_eco_mapping_resource_id", "resource_catalog_id"),
     )

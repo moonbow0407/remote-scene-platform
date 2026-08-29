@@ -36,8 +36,10 @@ from app.assets.property_schema import (
     validate_properties,
 )
 from app.assets.version_state import is_version_transition_allowed
+from app.catalogs.service import CatalogService
 from app.context import ActorContext, get_actor
-from app.errors import conflict, not_found
+from app.ecology.service import EcologyService
+from app.errors import conflict, not_found, validation_error
 from app.ids import new_uuid7
 
 logger = logging.getLogger(__name__)
@@ -56,21 +58,81 @@ class AssetService:
         asset_type: AssetType,
         source: AssetSource,
         properties: dict[str, Any] | None = None,
+        resource_catalog_id: UUID | None = None,
+        satellite_id: UUID | None = None,
+        sensor_id: UUID | None = None,
         actor: ActorContext | None = None,
     ) -> DataAsset:
         actor = actor or get_actor()
         self.validate_asset_properties(asset_type, properties or {})
+        catalog_id, sat_id, sen_id = self._resolve_catalog_refs(
+            resource_catalog_id=resource_catalog_id,
+            satellite_id=satellite_id,
+            sensor_id=sensor_id,
+        )
         asset = DataAsset(
             id=new_uuid7(),
             name=name,
             asset_type=asset_type,
             source=source,
             properties=properties or {},
+            resource_catalog_id=catalog_id,
+            satellite_id=sat_id,
+            sensor_id=sen_id,
             created_by=None if actor.actor_id is None else UUID(actor.actor_id),
         )
         self._session.add(asset)
         self._session.flush()
         return asset
+
+    def update_asset(
+        self,
+        asset_id: UUID,
+        *,
+        name: str | None = None,
+        resource_catalog_id: UUID | None = None,
+        satellite_id: UUID | None = None,
+        sensor_id: UUID | None = None,
+        set_fields: set[str] | None = None,
+    ) -> DataAsset:
+        """部分更新逻辑资产。set_fields 标明哪些可选字段出现在请求中（含显式 null）。"""
+        asset = self.get_asset_required(asset_id)
+        assigned = set_fields or set()
+        if name is not None:
+            asset.name = name
+        catalog_id = (
+            resource_catalog_id if "resource_catalog_id" in assigned else asset.resource_catalog_id
+        )
+        sat_id = satellite_id if "satellite_id" in assigned else asset.satellite_id
+        sen_id = sensor_id if "sensor_id" in assigned else asset.sensor_id
+        resolved_catalog, resolved_sat, resolved_sen = self._resolve_catalog_refs(
+            resource_catalog_id=catalog_id, satellite_id=sat_id, sensor_id=sen_id
+        )
+        asset.resource_catalog_id = resolved_catalog
+        asset.satellite_id = resolved_sat
+        asset.sensor_id = resolved_sen
+        self._session.flush()
+        return asset
+
+    def _resolve_catalog_refs(
+        self,
+        *,
+        resource_catalog_id: UUID | None,
+        satellite_id: UUID | None,
+        sensor_id: UUID | None,
+    ) -> tuple[UUID | None, UUID | None, UUID | None]:
+        catalogs = CatalogService(self._session)
+        if resource_catalog_id is not None:
+            catalogs.get_resource_required(resource_catalog_id)
+        if sensor_id is not None:
+            sensor = catalogs.get_sensor_required(sensor_id)
+            if satellite_id is None:
+                satellite_id = sensor.satellite_id
+            elif satellite_id != sensor.satellite_id:
+                raise validation_error("传感器不属于指定卫星")
+        if satellite_id is not None:
+            catalogs.get_satellite_required(satellite_id)
+        return resource_catalog_id, satellite_id, sensor_id
 
     def get_asset(self, asset_id: UUID) -> DataAsset | None:
         return self._session.get(DataAsset, asset_id)
@@ -243,9 +305,7 @@ class AssetService:
     def get_attachment_ext(self, version_id: UUID) -> AttachmentAssetVersion | None:
         return self._session.get(AttachmentAssetVersion, version_id)
 
-    def validate_asset_properties(
-        self, asset_type: AssetType, properties: dict[str, Any]
-    ) -> None:
+    def validate_asset_properties(self, asset_type: AssetType, properties: dict[str, Any]) -> None:
         row = self._session.scalar(
             sa.select(PropertySchema)
             .where(
@@ -274,9 +334,7 @@ class AssetService:
             existing.asset_type = asset_type
             self._session.flush()
             return existing
-        row = PropertySchema(
-            id=new_uuid7(), name=name, asset_type=asset_type, schema=schema
-        )
+        row = PropertySchema(id=new_uuid7(), name=name, asset_type=asset_type, schema=schema)
         self._session.add(row)
         self._session.flush()
         return row
@@ -323,23 +381,33 @@ class AssetService:
         version_status: AssetVersionStatus | None = None,
         acquired_from: datetime | None = None,
         acquired_to: datetime | None = None,
+        resource_catalog_id: UUID | None = None,
+        satellite_id: UUID | None = None,
+        sensor_id: UUID | None = None,
+        ecological_parameter_ids: list[UUID] | None = None,
         offset: int = 0,
         limit: int = 20,
     ) -> tuple[list[tuple[AssetVersion, DataAsset]], int]:
-        """资产版本检索；geometry_wkt 为 EPSG:4326 WKT 时按 footprint 相交过滤。"""
-        stmt = (
-            sa.select(AssetVersion, DataAsset)
-            .join(DataAsset, DataAsset.id == AssetVersion.asset_id)
-            .outerjoin(RasterAssetVersion, RasterAssetVersion.asset_version_id == AssetVersion.id)
-            .outerjoin(VectorAssetVersion, VectorAssetVersion.asset_version_id == AssetVersion.id)
+        """资产版本检索；geometry_wkt 为 EPSG:4326 WKT 时按 footprint 相交过滤。
+
+        目录过滤包含该节点及其子树；生态参数过滤走显式映射表（空映射返回空结果，
+        不生成 `IN ()`）。未知目录/卫星/传感器/参数主键一律 404。
+        """
+        stmt = sa.select(AssetVersion, DataAsset).join(
+            DataAsset, DataAsset.id == AssetVersion.asset_id
         )
         count_stmt = (
             sa.select(sa.func.count())
             .select_from(AssetVersion)
             .join(DataAsset, DataAsset.id == AssetVersion.asset_id)
-            .outerjoin(RasterAssetVersion, RasterAssetVersion.asset_version_id == AssetVersion.id)
-            .outerjoin(VectorAssetVersion, VectorAssetVersion.asset_version_id == AssetVersion.id)
         )
+        if geometry_wkt is not None:
+            stmt = stmt.outerjoin(
+                RasterAssetVersion, RasterAssetVersion.asset_version_id == AssetVersion.id
+            ).outerjoin(VectorAssetVersion, VectorAssetVersion.asset_version_id == AssetVersion.id)
+            count_stmt = count_stmt.outerjoin(
+                RasterAssetVersion, RasterAssetVersion.asset_version_id == AssetVersion.id
+            ).outerjoin(VectorAssetVersion, VectorAssetVersion.asset_version_id == AssetVersion.id)
         conditions: list[sa.ColumnElement[bool]] = []
         if geometry_wkt is not None:
             geom = WKTElement(geometry_wkt, srid=4326)
@@ -357,6 +425,23 @@ class AssetService:
             conditions.append(AssetVersion.acquired_at >= acquired_from)
         if acquired_to is not None:
             conditions.append(AssetVersion.acquired_at <= acquired_to)
+        catalogs = CatalogService(self._session)
+        if resource_catalog_id is not None:
+            catalog_ids = catalogs.subtree_ids(resource_catalog_id)
+            conditions.append(DataAsset.resource_catalog_id.in_(catalog_ids))
+        if satellite_id is not None:
+            catalogs.get_satellite_required(satellite_id)
+            conditions.append(DataAsset.satellite_id == satellite_id)
+        if sensor_id is not None:
+            catalogs.get_sensor_required(sensor_id)
+            conditions.append(DataAsset.sensor_id == sensor_id)
+        if ecological_parameter_ids:
+            mapped_ids = EcologyService(self._session).mapped_resource_catalog_ids(
+                ecological_parameter_ids
+            )
+            if not mapped_ids:
+                return [], 0
+            conditions.append(DataAsset.resource_catalog_id.in_(mapped_ids))
         if conditions:
             stmt = stmt.where(*conditions)
             count_stmt = count_stmt.where(*conditions)

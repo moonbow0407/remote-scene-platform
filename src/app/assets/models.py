@@ -11,6 +11,7 @@
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
+from uuid import UUID
 
 import sqlalchemy as sa
 from geoalchemy2 import Geometry, WKTElement
@@ -39,6 +40,27 @@ class DataAsset(Base, TimestampMixin):
         sa.Enum(AssetSource, native_enum=False, length=16),
         nullable=False,
         comment="来源：UPLOAD/SATELLITE/EXTERNAL_IMPORT",
+    )
+    resource_catalog_id: Mapped[UUID | None] = mapped_column(
+        sa.Uuid,
+        ForeignKey("resource_catalog.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+        comment="业务分类：资源目录主键；禁止名称/code 软引用",
+    )
+    satellite_id: Mapped[UUID | None] = mapped_column(
+        sa.Uuid,
+        ForeignKey("satellite.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+        comment="平台：卫星主键",
+    )
+    sensor_id: Mapped[UUID | None] = mapped_column(
+        sa.Uuid,
+        ForeignKey("sensor.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+        comment="仪器：传感器主键；须属于 satellite_id",
     )
     # 业务元数据（扩展属性），Stage 3 起按 JSON Schema 校验
     properties: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)

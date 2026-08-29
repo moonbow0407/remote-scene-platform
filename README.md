@@ -27,14 +27,14 @@ MinIO 保存不可变对象，RabbitMQ 仅负责消息传递，TiTiler 由 Nginx
 | **Stage 1** 可运行骨架 | 已完成 | Python 3.12 / `uv` 依赖分组、API 与 Worker 分镜像、Compose、RFC 9457、分页、探针、结构化日志、Alembic `0001`（PostGIS） |
 | **Stage 2** 栅格纵向闭环 | 主体已落地 | 上传 → Outbox → Worker → COG → PostGIS → 瓦片令牌。关闭与否以 A2.1–A2.10 为准 |
 | **Stage 3** 矢量与附件 | 主体已落地 | 同一资产生命周期上 GeoJSON/Shapefile/GPKG 导入、附件 READY、要素空间检索、JSON Schema。关闭与否以 A3.1–A3.5 为准 |
-| **Stage 4** 目录与生态映射 | 进行中 | 管理类 CRUD 已落地（资源目录树、卫星/传感器、生态参数与显式多对多映射）；资产检索过滤与监测接入待后续 |
+| **Stage 4** 目录与生态映射 | 已完成 | 资源目录树、卫星/传感器、生态参数与显式多对多映射；资产分类外键；检索按目录（含子树）/卫星/传感器/生态映射过滤。A4.1–A4.3 已在 Compose 上通过 |
 | **Stage 5** 监测计划与调度 | 未开始 | 计划、RRULE/间隔、Scheduler 锁、增量选择、不可变输入快照 |
 | **Stage 6** 生命周期与可靠性 | 未开始 | 软删除与 7 天恢复、无引用对象清理、超时/取消、运维指标 |
 | **Stage 7** 迁移收口 | 未开始 | 矩阵核对、全量验收、OpenAPI 与前端交接 |
 
-**当前工作：关闭 Stage 2 / Stage 3 验收；Stage 4A 目录/生态管理类 CRUD 可并行联调。**
+**当前工作：关闭 Stage 2 / Stage 3 验收；Stage 5 未开始。**
 
-## 已交付能力（截至 Stage 3，含 Stage 4A 管理类）
+## 已交付能力（截至 Stage 4）
 
 对外入口：`http://localhost:8080`，业务 API 前缀 `/api/v1`。
 
@@ -44,7 +44,8 @@ MinIO 保存不可变对象，RabbitMQ 仅负责消息传递，TiTiler 由 Nginx
 | 创建分片上传会话 | `POST /api/v1/uploads/sessions`（预签名直传 MinIO，文件不经 API） |
 | 会话详情 / 补签分片 / 完成 / 中止 | `GET/POST /api/v1/uploads/sessions/{id}`… |
 | 资产与版本 | `GET /api/v1/assets/{id}`、`…/versions`、`…/versions/{vid}` |
-| 空间检索 | `POST /api/v1/assets/search`（EPSG:4326 Polygon/MultiPolygon） |
+| 空间/目录检索 | `POST /api/v1/assets/search`（EPSG:4326 几何；目录含子树、卫星、传感器、生态映射） |
+| 更新资产分类 | `PATCH /api/v1/assets/{id}`（名称与目录/卫星/传感器外键；显式 null 清除） |
 | 缺 CRS 续跑 | `POST /api/v1/assets/{id}/versions/{vid}/inputs` |
 | 工件下载 | `GET /api/v1/assets/{id}/versions/{vid}/artifacts/{kind}/download-url` |
 | Job 轮询 | `GET /api/v1/jobs/{job_id}` |
@@ -60,7 +61,7 @@ MinIO 保存不可变对象，RabbitMQ 仅负责消息传递，TiTiler 由 Nginx
 
 Prometheus 指标 `GET /api/v1/metrics` 仅 Compose 内网抓取，Nginx 对外返回 404。
 
-上传支持栅格 TIFF、矢量（GeoJSON / Shapefile ZIP / GeoPackage）和普通附件。监测计划尚未提供 API。Stage 4 资产检索按目录/卫星/传感器/生态映射过滤尚未接入。
+上传支持栅格 TIFF、矢量（GeoJSON / Shapefile ZIP / GeoPackage）和普通附件；创建会话可同时绑定资源目录、卫星与传感器。监测计划尚未提供 API。
 
 ## 快速启动
 
@@ -113,8 +114,9 @@ src/app/
 ├── api/        # FastAPI 应用工厂、探针、指标、trace 中间件
 ├── assets/     # 逻辑资产、不可变版本、检索
 ├── uploads/    # MinIO Multipart 上传会话
-├── catalogs/   # 资源目录、卫星、传感器（Stage 4A）
-├── ecology/    # 生态参数与资源映射（Stage 4A）
+├── catalogs/   # 资源目录、卫星、传感器（Stage 4）
+├── ecology/    # 生态参数与资源映射（Stage 4）
+├── auth/       # JWT 用户鉴权接缝
 ├── jobs/       # Job 状态机、事件、Outbox
 ├── processing/ # 栅格/矢量/附件入库流水线与 Celery 任务
 ├── vector_features/  # PostGIS 要素与空间检索
@@ -122,14 +124,14 @@ src/app/
 ├── worker/     # Celery Geo Worker
 ├── dispatcher/ # Outbox Dispatcher
 └── scheduler/  # 独立 Scheduler
-alembic/        # 迁移（0001 PostGIS，0002 栅格，0003 矢量/附件；Stage 4 表待合并）
+alembic/        # 迁移（0001 PostGIS，0002 栅格，0003 矢量/附件，0004 用户，0005 目录/生态与资产外键）
 docker/         # api/worker 镜像与 Nginx 配置
 prometheus/     # 抓取配置
 doc/            # 架构、阶段方案、迁移矩阵、验收基线
 tests/          # 进程内测试；集成测试随阶段补充
 ```
 
-尚未落地、不要预先建空目录：`catalogs`、`ecology`、`monitoring`、`vector_features`。
+尚未落地、不要预先建空目录：`monitoring`。
 
 ## 约定摘要
 

@@ -25,9 +25,33 @@ class AssetDetailResponse(BaseModel):
     name: str
     asset_type: AssetType
     source: AssetSource
+    resource_catalog_id: UUID | None
+    satellite_id: UUID | None
+    sensor_id: UUID | None
     properties: dict[str, Any]
     current_version: VersionSummary | None
     created_at: datetime
+
+
+class AssetUpdateRequest(BaseModel):
+    """部分更新逻辑资产；未出现字段保持不变，分类外键显式 null 表示清除。"""
+
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    resource_catalog_id: UUID | None = Field(
+        default=None, description="省略=不改；UUID=新分类；null=清除"
+    )
+    satellite_id: UUID | None = Field(default=None, description="省略=不改；UUID=新卫星；null=清除")
+    sensor_id: UUID | None = Field(default=None, description="省略=不改；UUID=新传感器；null=清除")
+
+    @field_validator("name")
+    @classmethod
+    def _name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        name = value.strip()
+        if not name:
+            raise ValueError("name 不能为空")
+        return name
 
 
 class BBox(BaseModel):
@@ -105,6 +129,15 @@ class SearchRequest(BaseModel):
     version_status: AssetVersionStatus | None = None
     acquired_from: datetime | None = None
     acquired_to: datetime | None = None
+    resource_catalog_id: UUID | None = Field(
+        default=None, description="资源目录主键；命中该节点及其子树"
+    )
+    satellite_id: UUID | None = None
+    sensor_id: UUID | None = None
+    ecological_parameter_ids: list[UUID] = Field(
+        default_factory=list,
+        description="生态参数主键集合；空列表不加过滤。映射为空时返回空结果，不生成 IN ()",
+    )
     page: int = Field(default=1, ge=1, description="页码，从 1 开始")
     page_size: int = Field(default=20, ge=1, le=MAX_PAGE_SIZE, description="每页条数")
 
@@ -124,6 +157,9 @@ class SearchItem(BaseModel):
     version_number: int
     status: AssetVersionStatus
     acquired_at: datetime | None
+    resource_catalog_id: UUID | None = None
+    satellite_id: UUID | None = None
+    sensor_id: UUID | None = None
     bbox: BBox | None
 
 

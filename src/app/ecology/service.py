@@ -295,9 +295,7 @@ class EcologyService:
     def create_mappings_batch(self, body: MappingBatchCreate) -> MappingBatchResponse:
         # 空输入安全：直接返回空结果
         if not body.items:
-            return MappingBatchResponse(
-                created=[], existing=[], created_count=0, existing_count=0
-            )
+            return MappingBatchResponse(created=[], existing=[], created_count=0, existing_count=0)
 
         # 输入去重（保持首次出现顺序）
         unique_pairs: list[tuple[UUID, UUID]] = []
@@ -363,6 +361,27 @@ class EcologyService:
             created_count=len(created_out),
             existing_count=len(existing_out),
         )
+
+    def mapped_resource_catalog_ids(self, parameter_ids: list[UUID]) -> list[UUID]:
+        """返回生态参数集合映射到的资源目录主键；空映射返回空列表（禁止生成 IN ()）。"""
+        unique: list[UUID] = []
+        seen: set[UUID] = set()
+        for parameter_id in parameter_ids:
+            if parameter_id in seen:
+                continue
+            seen.add(parameter_id)
+            unique.append(parameter_id)
+            self.get_parameter_required(parameter_id)
+        if not unique:
+            return []
+        rows = list(
+            self._session.scalars(
+                sa.select(EcologicalParameterResourceMapping.resource_catalog_id).where(
+                    EcologicalParameterResourceMapping.ecological_parameter_id.in_(unique)
+                )
+            )
+        )
+        return list(dict.fromkeys(rows))
 
     def delete_mapping(self, mapping_id: UUID) -> None:
         row = self.get_mapping_required(mapping_id)

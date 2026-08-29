@@ -1,9 +1,9 @@
 """目录模块服务：资源目录树、卫星与传感器用例。
 
 边界：
-- 本模块只维护目录主数据；资产检索过滤与监测引用在后续阶段接入；
-- 删除时检查子节点与同模块引用；跨模块引用（如生态映射）通过 DB RESTRICT
-  与显式存在性查询共同保证，不跨模块直接操作对方 ORM 查询逻辑以外的表写入。
+- 本模块维护目录主数据，并提供子树 ID 供资产检索过滤；
+- 删除时检查子节点与生态映射；资产等跨模块引用由 DB RESTRICT 在 flush 时拒绝，
+  不跨模块写入对方表。
 """
 
 from __future__ import annotations
@@ -180,9 +180,7 @@ class CatalogService:
     def resource_tree(
         self, *, status: CatalogStatus | None = None
     ) -> list[ResourceCatalogTreeNode]:
-        stmt = sa.select(ResourceCatalog).order_by(
-            ResourceCatalog.sort_order, ResourceCatalog.code
-        )
+        stmt = sa.select(ResourceCatalog).order_by(ResourceCatalog.sort_order, ResourceCatalog.code)
         if status is not None:
             stmt = stmt.where(ResourceCatalog.status == status)
         rows = list(self._session.scalars(stmt))
@@ -204,6 +202,21 @@ class CatalogService:
             ]
 
         return build(None)
+
+    def subtree_ids(self, resource_id: UUID) -> list[UUID]:
+        """包含自身的子树主键；目录规模小，在内存中展开。"""
+        self.get_resource_required(resource_id)
+        rows = self._session.execute(sa.select(ResourceCatalog.id, ResourceCatalog.parent_id)).all()
+        children: dict[UUID | None, list[UUID]] = {}
+        for row_id, parent_id in rows:
+            children.setdefault(parent_id, []).append(row_id)
+        ordered: list[UUID] = []
+        stack = [resource_id]
+        while stack:
+            current = stack.pop()
+            ordered.append(current)
+            stack.extend(reversed(children.get(current, [])))
+        return ordered
 
     def _ensure_resource_code_unique(self, code: str, *, exclude_id: UUID | None = None) -> None:
         stmt = sa.select(ResourceCatalog.id).where(ResourceCatalog.code == code)

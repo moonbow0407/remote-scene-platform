@@ -61,6 +61,9 @@ def create_session(
         properties=body.properties,
         source=body.source,
         asset_id=body.asset_id,
+        resource_catalog_id=body.resource_catalog_id,
+        satellite_id=body.satellite_id,
+        sensor_id=body.sensor_id,
     )
     return SessionCreatedResponse(
         session_id=session.id,

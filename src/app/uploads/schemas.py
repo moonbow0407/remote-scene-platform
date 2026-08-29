@@ -20,6 +20,9 @@ class CreateSessionRequest(BaseModel):
     asset_id: UUID | None = Field(
         default=None, description="为已有资产追加新版本；空则创建新逻辑资产"
     )
+    resource_catalog_id: UUID | None = Field(default=None, description="业务分类：资源目录主键")
+    satellite_id: UUID | None = Field(default=None, description="平台：卫星主键")
+    sensor_id: UUID | None = Field(default=None, description="仪器：传感器主键")
     properties: dict[str, Any] = Field(
         default_factory=dict, description="业务元数据，可含 ISO8601 acquired_at"
     )

@@ -44,20 +44,24 @@ src/app/
 ├── api/            # FastAPI 工厂、探针、指标、trace 中间件
 ├── assets/         # 逻辑资产、不可变版本、栅格扩展、成果、检索
 ├── uploads/        # MinIO Multipart 上传会话
+├── catalogs/       # 资源目录、卫星、传感器
+├── ecology/        # 生态参数与资源映射
+├── auth/           # JWT 用户鉴权接缝
 ├── jobs/           # Job 状态机、事件、Outbox
 ├── processing/     # 入库流水线与 Celery 任务
+├── vector_features/# PostGIS 要素与空间检索
 ├── tiles/          # 短期瓦片令牌签发与 Nginx 校验
 ├── dispatcher/     # Outbox 投递循环
 ├── worker/         # Celery Geo Worker 入口
 └── scheduler/      # 独立 Scheduler（Stage 5 实装评估循环）
-alembic/            # 迁移（0001 PostGIS，0002 Stage 2 栅格模型）
+alembic/            # 迁移（0001 PostGIS，0002 栅格，0003 矢量/附件，0004 用户，0005 目录/生态）
 docker/             # api/worker 镜像与 Nginx
 tests/              # 进程内测试；integration 需显式基础设施
 tests/fixtures/     # 验收夹具
 doc/                # 总体架构、阶段方案、迁移矩阵、验收基线
 ```
 
-尚未落地、不要预先建空目录的模块：`catalogs`、`ecology`、`monitoring`、`vector_features`。它们按 Stage 3–5 随用例创建。
+尚未落地、不要预先建空目录的模块：`monitoring`。按 Stage 5 随用例创建。
 
 每个已落地模块内部按 `router / schemas / service / models` 组织。本模块查询可以写在 Service；只有查询复杂到需要独立测试或复用时才抽取 Repository。模块之间通过公开 Service 协作，不跨模块直接访问 ORM 或内部实现。
 

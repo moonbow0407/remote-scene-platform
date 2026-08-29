@@ -5,7 +5,9 @@ from sqlalchemy import create_engine, pool, text
 from alembic import context
 from app.assets import models as _assets_models  # noqa: F401
 from app.auth import models as _auth_models  # noqa: F401
+from app.catalogs import models as _catalogs_models  # noqa: F401
 from app.db import Base
+from app.ecology import models as _ecology_models  # noqa: F401
 from app.jobs import models as _jobs_models  # noqa: F401
 from app.settings import get_settings
 from app.uploads import models as _uploads_models  # noqa: F401
