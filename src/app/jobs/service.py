@@ -9,7 +9,7 @@
 
 import logging
 from datetime import timedelta
-from typing import Any
+from typing import Any, NamedTuple
 from uuid import UUID
 
 import sqlalchemy as sa
@@ -25,6 +25,13 @@ logger = logging.getLogger(__name__)
 
 # RUNNING 超过该时长且消息被重投，视为 Worker 崩溃留下的陈旧认领
 _STALE_RUNNING_SECONDS = 30 * 60
+
+
+class JobClaim(NamedTuple):
+    """Worker 认领结果。acquired=True 表示本调用取得执行权，必须且仅此 Worker 执行。"""
+
+    job: Job
+    acquired: bool
 
 
 class JobService:
@@ -155,12 +162,12 @@ class JobService:
         self.transition(job, JobStatus.QUEUED, event_type="JOB_REQUEUED")
         return event
 
-    def claim_for_run(self, job_id: UUID) -> Job:
-        """Worker 认领：QUEUED/RETRYING → RUNNING。
+    def claim_for_run(self, job_id: UUID) -> JobClaim:
+        """Worker 认领：QUEUED/RETRYING/PENDING → RUNNING。
 
-        重复投递时任务已处于 RUNNING 或终态，直接返回现状由调用方判断，
-        不抛错——至少一次投递允许同一条消息被消费多次。
-        RUNNING 超过陈旧阈值（Worker 崩溃后消息重投）时回收重跑。
+        行锁保证同一 Job 同一时刻只有一个调用者 acquired=True。
+        重复投递看到 RUNNING（未过期）或终态时 acquired=False，调用方必须跳过执行。
+        RUNNING 超过陈旧阈值（Worker 崩溃后消息重投）时回收再认领。
         """
         job = self._session.scalar(sa.select(Job).where(Job.id == job_id).with_for_update())
         if job is None:
@@ -178,7 +185,8 @@ class JobService:
         if job.status in (JobStatus.PENDING, JobStatus.QUEUED, JobStatus.RETRYING):
             job.attempt = job.attempt + 1
             self.transition(job, JobStatus.RUNNING, event_type="JOB_CLAIMED")
-        return job
+            return JobClaim(job=job, acquired=True)
+        return JobClaim(job=job, acquired=False)
 
 
 class OutboxRepository:

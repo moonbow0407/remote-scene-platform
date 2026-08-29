@@ -56,17 +56,17 @@ def ingest_raster(self: Task, job_id: str) -> None:
 
     with session_scope(factory) as session:
         jobs = JobService(session)
-        job = jobs.claim_for_run(job_uuid)
-        if job.status is not JobStatus.RUNNING:
-            # 重复投递且任务已在执行/终态：直接忽略，不重复执行
+        claim = jobs.claim_for_run(job_uuid)
+        if not claim.acquired:
+            # 其他 Worker 正在执行，或任务已终态：至少一次投递下必须跳过，不能凭 RUNNING 再跑一遍
             logger.info(
                 "任务重复投递，忽略",
-                extra={"job_id": job_id, "status": job.status.value},
+                extra={"job_id": job_id, "status": claim.job.status.value},
             )
             return
-        payload = dict(job.payload)
-        attempt = job.attempt
-        max_attempts = job.max_attempts
+        payload = dict(claim.job.payload)
+        attempt = claim.job.attempt
+        max_attempts = claim.job.max_attempts
 
     ctx = IngestionContext(
         job_id=job_uuid,

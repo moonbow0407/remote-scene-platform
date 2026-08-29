@@ -6,6 +6,7 @@
 
 import hashlib
 import logging
+from pathlib import Path
 from typing import Any, BinaryIO
 
 import boto3
@@ -138,6 +139,8 @@ class MinioAdapter:
                     )
             return parts
         except ClientError as exc:
+            if _is_missing_bucket(exc):
+                raise MinioError(f"存储桶不存在或不可访问：{self.bucket}") from exc
             if _not_found(exc):
                 # 会话已不存在（被中止/清理）视同无分片
                 return []
@@ -161,6 +164,8 @@ class MinioAdapter:
                 },
             )
         except ClientError as exc:
+            if _is_missing_bucket(exc):
+                raise MinioError(f"存储桶不存在或不可访问：{self.bucket}") from exc
             if _not_found(exc):
                 # 已完成/已中止的会话再次完成：幂等处理，由调用方校验对象存在
                 logger.info("分片上传会话已不存在，视为已完成", extra={"key": key})
@@ -173,6 +178,8 @@ class MinioAdapter:
         try:
             self._client.abort_multipart_upload(Bucket=self.bucket, Key=key, UploadId=upload_id)
         except ClientError as exc:
+            if _is_missing_bucket(exc):
+                raise MinioError(f"存储桶不存在或不可访问：{self.bucket}") from exc
             if _not_found(exc):
                 return
             raise MinioError(f"中止分片上传失败：{exc}") from exc
@@ -187,6 +194,8 @@ class MinioAdapter:
                 "etag": str(response["ETag"]).strip('"'),
             }
         except ClientError as exc:
+            if _is_missing_bucket(exc):
+                raise MinioError(f"存储桶不存在或不可访问：{self.bucket}") from exc
             if _not_found(exc):
                 return None
             raise MinioError(f"读取对象元数据失败：{exc}") from exc
@@ -252,25 +261,54 @@ class MinioAdapter:
     def download_to_file(
         self, *, key: str, local_path: str, expected_sha256: str | None = None
     ) -> int:
-        """流式下载到本地文件（不整载入内存）；可选校验 SHA-256。返回字节数。"""
+        """流式下载到本地文件（不整载入内存）；可选校验 SHA-256。返回字节数。
+
+        先写入 `.partial` 再原子替换，中途失败不会留下被误认为完整的目标文件。
+        """
+        dest = Path(local_path)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        tmp = dest.with_name(dest.name + ".partial")
         digest = hashlib.sha256()
         size = 0
         try:
             response = self._client.get_object(Bucket=self.bucket, Key=key)
             body: BinaryIO = response["Body"]
-            with open(local_path, "wb") as f:
-                for chunk in iter(lambda: body.read(1024 * 1024), b""):
-                    f.write(chunk)
-                    digest.update(chunk)
-                    size += len(chunk)
-            response["Body"].close()
+            try:
+                with open(tmp, "wb") as f:
+                    for chunk in iter(lambda: body.read(1024 * 1024), b""):
+                        f.write(chunk)
+                        digest.update(chunk)
+                        size += len(chunk)
+            finally:
+                body.close()
         except (BotoCoreError, ClientError) as exc:
+            _unlink_quietly(tmp)
             raise MinioError(f"下载对象失败：{exc}") from exc
+        except Exception:
+            _unlink_quietly(tmp)
+            raise
         if expected_sha256 is not None and digest.hexdigest() != expected_sha256:
+            _unlink_quietly(tmp)
             raise MinioError(f"对象内容校验失败：{key} 与记录的 SHA-256 不一致")
+        tmp.replace(dest)
         return size
 
 
+def s3_error_code(exc: ClientError) -> str:
+    return str(exc.response.get("Error", {}).get("Code", ""))
+
+
+def _is_missing_bucket(exc: ClientError) -> bool:
+    return s3_error_code(exc) == "NoSuchBucket"
+
+
 def _not_found(exc: ClientError) -> bool:
-    code = exc.response.get("Error", {}).get("Code", "")
-    return code in ("NoSuchUpload", "NoSuchKey", "404", "NoSuchBucket")
+    """对象或分片会话不存在。存储桶缺失不是“文件不存在”，必须单独按基础设施故障处理。"""
+    return s3_error_code(exc) in ("NoSuchUpload", "NoSuchKey", "404", "NotFound")
+
+
+def _unlink_quietly(path: Path) -> None:
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        logger.warning("残留临时文件删除失败", extra={"path": str(path)})

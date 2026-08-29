@@ -48,6 +48,58 @@ def is_supported_tiff_magic(magic: bytes) -> bool:
     return magic in _TIFF_MAGICS
 
 
+def stretch_band_to_uint8(band_data: Any, nodata: float | None) -> Any:
+    """把单波段拉伸到 uint8；NaN/Inf 以及 NoData（含 NaN NoData）不参与 min/max。"""
+    import numpy as np
+
+    data = np.asarray(band_data, dtype=np.float32)
+    valid = np.isfinite(data)
+    if nodata is not None and np.isfinite(nodata):
+        valid &= data != np.float32(nodata)
+    stretched = np.zeros(data.shape, dtype=np.uint8)
+    if not np.any(valid):
+        return stretched
+    finite = data[valid]
+    low = float(finite.min())
+    high = float(finite.max())
+    span = (high - low) or 1.0
+    scaled = (data - low) / span * 255.0
+    np.clip(scaled, 0, 255, out=scaled)
+    stretched[valid] = scaled[valid].astype(np.uint8)
+    return stretched
+
+
+def write_chunks_atomically(path: Path, chunks: Any, hasher: Any) -> int:
+    """流式写入临时文件后原子替换，避免半成品被当成完整文件。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".partial")
+    size = 0
+    try:
+        with open(tmp, "wb") as handle:
+            for chunk in chunks:
+                handle.write(chunk)
+                hasher.update(chunk)
+                size += len(chunk)
+        tmp.replace(path)
+        return size
+    except Exception:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            logger.warning("残留分片文件删除失败", extra={"path": str(tmp)})
+        raise
+
+
+def cleanup_tmp_dir(tmp_dir: Path) -> None:
+    """删除任务临时目录；失败只记日志，不掩盖主流程错误。"""
+    if not tmp_dir.exists():
+        return
+    try:
+        shutil.rmtree(tmp_dir)
+    except OSError as exc:
+        logger.warning("临时目录清理失败", extra={"tmp_dir": str(tmp_dir), "detail": str(exc)})
+
+
 @dataclass
 class IngestionContext:
     job_id: UUID
@@ -78,14 +130,18 @@ class RasterIngestion:
         self._engine = engine
 
     def run(self, ctx: IngestionContext) -> None:
-        self._preflight(ctx)
-        self._step_validate(ctx)
-        self._step_hash_dedup(ctx)
-        self._step_inspect(ctx)
-        self._step_create_cog(ctx)
-        self._step_thumbnail(ctx)
-        self._step_footprint(ctx)
-        self._step_finalize(ctx)
+        cleanup_tmp_dir(ctx.tmp_dir)
+        try:
+            self._preflight(ctx)
+            self._step_validate(ctx)
+            self._step_hash_dedup(ctx)
+            self._step_inspect(ctx)
+            self._step_create_cog(ctx)
+            self._step_thumbnail(ctx)
+            self._step_footprint(ctx)
+            self._step_finalize(ctx)
+        finally:
+            cleanup_tmp_dir(ctx.tmp_dir)
 
     # ---- 步骤实现 ----
 
@@ -147,13 +203,10 @@ class RasterIngestion:
                 return
 
         digest = hashlib.sha256()
-        size = 0
         ctx.tmp_dir.mkdir(parents=True, exist_ok=True)
-        with open(ctx.source_path, "wb") as f:
-            for chunk in self._minio.stream_download(key=ctx.source_object_key):
-                f.write(chunk)
-                digest.update(chunk)
-                size += len(chunk)
+        size = write_chunks_atomically(
+            ctx.source_path, self._minio.stream_download(key=ctx.source_object_key), digest
+        )
         sha = digest.hexdigest()
         canonical_key = f"original/{sha[:2]}/{sha[2:4]}/{sha}"
 
@@ -317,16 +370,7 @@ class RasterIngestion:
             data = src.read(
                 read_idx, out_shape=(len(read_idx), out_h, out_w), resampling=Resampling.bilinear
             )
-            out_bands = []
-            for band_data in data:
-                finite = band_data[band_data != nodata] if nodata is not None else band_data
-                low = float(finite.min()) if finite.size else 0.0
-                high = float(finite.max()) if finite.size else 1.0
-                span = (high - low) or 1.0
-                stretched = (
-                    ((band_data.astype("float32") - low) / span * 255).clip(0, 255).astype("uint8")
-                )
-                out_bands.append(stretched)
+            out_bands = [stretch_band_to_uint8(band_data, nodata) for band_data in data]
             thumbnail = ctx.thumbnail_path
             if mode == "grayscale" or len(out_bands) == 1:
                 with rasterio.open(
@@ -420,26 +464,30 @@ class RasterIngestion:
             )
 
     def _ensure_source_local(self, ctx: IngestionContext) -> Path:
-        if ctx.source_path.exists():
-            return ctx.source_path
-        ctx.tmp_dir.mkdir(parents=True, exist_ok=True)
         key = ctx.source_object_key
+        expected_size = ctx.source_size_bytes
         with session_scope(self._engine) as session:
             assets = AssetService(session)
             version = assets.get_version_by_id(ctx.version_id)
             assert version is not None
             if version.blob is not None:
                 key = version.blob.object_key
+                expected_size = version.blob.size_bytes
+        if _is_complete_local_file(ctx.source_path, expected_size):
+            return ctx.source_path
+        ctx.tmp_dir.mkdir(parents=True, exist_ok=True)
         self._minio.download_to_file(key=key, local_path=str(ctx.source_path))
         return ctx.source_path
 
     def _ensure_cog_local(self, ctx: IngestionContext) -> Path:
-        if ctx.cog_path.exists():
-            return ctx.cog_path
         with session_scope(self._engine) as session:
             assets = AssetService(session)
             cog = assets.get_artifact_required(ctx.version_id, ArtifactKind.COG)
             key = cog.object_key
+            expected_size = cog.size_bytes
+        if expected_size is not None and _is_complete_local_file(ctx.cog_path, expected_size):
+            return ctx.cog_path
+        ctx.tmp_dir.mkdir(parents=True, exist_ok=True)
         self._minio.download_to_file(key=key, local_path=str(ctx.cog_path))
         return ctx.cog_path
 
@@ -452,3 +500,10 @@ class RasterIngestion:
                 )
         except Exception:
             logger.warning("步骤事件记录失败", extra={"step": step, "job_id": str(ctx.job_id)})
+
+
+def _is_complete_local_file(path: Path, expected_size: int) -> bool:
+    try:
+        return path.is_file() and path.stat().st_size == expected_size
+    except OSError:
+        return False

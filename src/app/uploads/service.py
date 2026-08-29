@@ -158,13 +158,18 @@ class UploadService:
     def list_parts(self, session: UploadSession) -> list[dict[str, Any]]:
         return self._minio.list_parts(key=session.object_key, upload_id=session.minio_upload_id)
 
-    def complete_session(self, session_id: UUID) -> dict[str, Any]:
-        """完成上传：MinIO 合并 + 同事务创建版本/Job/Outbox。幂等。"""
+    def _lock_session(self, session_id: UUID) -> UploadSession:
+        """行锁会话，使 complete 与 abort 互斥。"""
         session = self._session.scalar(
             sa.select(UploadSession).where(UploadSession.id == session_id).with_for_update()
         )
         if session is None:
             raise not_found("上传会话", session_id)
+        return session
+
+    def complete_session(self, session_id: UUID) -> dict[str, Any]:
+        """完成上传：MinIO 合并 + 同事务创建版本/Job/Outbox。幂等。"""
+        session = self._lock_session(session_id)
         if session.status is UploadSessionStatus.COMPLETED:
             return self._existing_completion(session)
         if session.status is UploadSessionStatus.ABORTED:
@@ -260,11 +265,14 @@ class UploadService:
         }
 
     def abort_session(self, session_id: UUID) -> UploadSession:
-        session = self.get_session_required(session_id)
+        """中止上传。必须先锁会话再改 MinIO，避免与 complete 交错把已完成会话写成 ABORTED。"""
+        session = self._lock_session(session_id)
         if session.status is UploadSessionStatus.COMPLETED:
             raise conflict(
                 code="UPLOAD_SESSION_COMPLETED", detail=f"上传会话 {session_id} 已完成，不能中止"
             )
+        if session.status is UploadSessionStatus.ABORTED:
+            return session
         self._minio.abort_multipart_upload(
             key=session.object_key, upload_id=session.minio_upload_id
         )

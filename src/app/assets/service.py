@@ -297,3 +297,40 @@ class AssetService:
         if artifact is None:
             raise not_found("工件", kind.value)
         return artifact
+
+    def resume_from_needs_input(self, version: AssetVersion, *, user_crs: str) -> None:
+        """补充 CRS 后恢复处理。没有可恢复 Job 时不得把版本改成 PROCESSING。"""
+        from app.jobs.enums import JobStatus
+        from app.jobs.models import Job
+        from app.jobs.service import JobService
+
+        locked = self._session.scalar(
+            sa.select(AssetVersion).where(AssetVersion.id == version.id).with_for_update()
+        )
+        if locked is None:
+            raise not_found("资产版本", version.id)
+        if locked.status is not AssetVersionStatus.NEEDS_INPUT:
+            raise conflict(
+                code="ASSET_VERSION_NOT_NEEDS_INPUT",
+                detail=f"版本 {locked.id} 不处于 NEEDS_INPUT 状态（当前 {locked.status}）",
+            )
+        job = self._session.scalars(
+            sa.select(Job)
+            .where(
+                Job.asset_version_id == locked.id,
+                Job.status == JobStatus.NEEDS_INPUT,
+            )
+            .order_by(Job.created_at.desc())
+            .with_for_update()
+        ).first()
+        if job is None:
+            raise conflict(
+                code="NEEDS_INPUT_JOB_MISSING",
+                detail=(
+                    f"版本 {locked.id} 处于 NEEDS_INPUT，但没有可恢复的任务；"
+                    "拒绝将版本改为 PROCESSING"
+                ),
+            )
+        self.upsert_raster_ext(locked.id, user_crs=user_crs)
+        self.set_version_status(locked, AssetVersionStatus.PROCESSING)
+        JobService(self._session).requeue(job)

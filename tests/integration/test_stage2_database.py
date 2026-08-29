@@ -121,14 +121,16 @@ def test_pending_job_is_claimed_once_under_duplicate_delivery(
         )
         job_id = job.id
 
-    def claim() -> JobStatus:
+    def claim() -> tuple[JobStatus, bool]:
         with session_scope(factory) as session:
-            return JobService(session).claim_for_run(job_id).status
+            result = JobService(session).claim_for_run(job_id)
+            return result.job.status, result.acquired
 
     with ThreadPoolExecutor(max_workers=2) as executor:
-        statuses = list(executor.map(lambda _: claim(), range(2)))
+        outcomes = list(executor.map(lambda _: claim(), range(2)))
 
-    assert statuses == [JobStatus.RUNNING, JobStatus.RUNNING]
+    assert sorted(acquired for _, acquired in outcomes) == [False, True]
+    assert all(status is JobStatus.RUNNING for status, _ in outcomes)
     with session_scope(factory) as session:
         job = session.get(Job, job_id)
         assert job is not None
@@ -145,6 +147,89 @@ def test_pending_job_is_claimed_once_under_duplicate_delivery(
             )
             == 1
         )
+
+
+class _CompleteAbortMinio:
+    def list_parts(self, *, key: str, upload_id: str) -> list[dict[str, object]]:
+        return []
+
+    def head_object(self, *, key: str) -> dict[str, object]:
+        return {"size": 8, "etag": "fixture"}
+
+    def abort_multipart_upload(self, *, key: str, upload_id: str) -> None:
+        return None
+
+
+def test_concurrent_complete_and_abort_do_not_diverge(
+    factory: sessionmaker[Session],
+) -> None:
+    session_id = new_uuid7()
+    with session_scope(factory) as session:
+        asset = AssetService(session).create_asset(
+            name="完成中止竞争",
+            asset_type=AssetType.RASTER,
+            source=AssetSource.UPLOAD,
+        )
+        asset_id = asset.id
+        session.add(
+            UploadSession(
+                id=session_id,
+                asset_id=asset_id,
+                status=UploadSessionStatus.PENDING,
+                minio_upload_id="upload-id",
+                object_key=f"uploads/{session_id}/fixture.tif",
+                file_name="fixture.tif",
+                size_bytes=8,
+                part_count=1,
+                content_type="image/tiff",
+            )
+        )
+
+    minio = cast(MinioAdapter, _CompleteAbortMinio())
+    settings = Settings()
+
+    def complete() -> str:
+        try:
+            with session_scope(factory) as session:
+                UploadService(session, minio, settings).complete_session(session_id)
+            return "completed"
+        except Exception as exc:
+            return f"complete_error:{type(exc).__name__}"
+
+    def abort() -> str:
+        try:
+            with session_scope(factory) as session:
+                UploadService(session, minio, settings).abort_session(session_id)
+            return "aborted"
+        except Exception as exc:
+            return f"abort_error:{type(exc).__name__}"
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(complete)
+        second = executor.submit(abort)
+        results = {first.result(), second.result()}
+
+    with session_scope(factory) as session:
+        row = session.get(UploadSession, session_id)
+        assert row is not None
+        version_count = int(
+            session.scalar(
+                sa.select(sa.func.count())
+                .select_from(AssetVersion)
+                .where(AssetVersion.asset_id == asset_id)
+            )
+            or 0
+        )
+        job_count = int(session.scalar(sa.select(sa.func.count()).select_from(Job)) or 0)
+        if row.status is UploadSessionStatus.COMPLETED:
+            assert version_count == 1
+            assert job_count == 1
+            assert any(item.startswith("abort_error:") for item in results)
+        else:
+            assert row.status is UploadSessionStatus.ABORTED
+            assert version_count == 0
+            assert job_count == 0
+            assert any(item.startswith("complete_error:") for item in results)
 
 
 def test_concurrent_blob_creation_reuses_one_row(factory: sessionmaker[Session]) -> None:

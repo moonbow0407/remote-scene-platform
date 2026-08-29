@@ -1,7 +1,6 @@
 """资产路由：详情、版本、工件下载、空间检索与 NEEDS_INPUT 恢复。"""
 
 import json
-import logging
 import re
 from collections.abc import Iterator
 from typing import Annotated, Any
@@ -28,15 +27,10 @@ from app.assets.schemas import (
 from app.assets.service import AssetService
 from app.context import get_actor
 from app.db import session_scope
-from app.errors import conflict, not_found, validation_error
-from app.jobs.enums import JobStatus
-from app.jobs.models import Job
-from app.jobs.service import JobService
+from app.errors import not_found, validation_error
 from app.pagination import Page, PageParams
 from app.settings import Settings
 from app.uploads.minio import MinioAdapter
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/assets", tags=["资产"])
 _EPSG_PATTERN = re.compile(r"^EPSG:[1-9][0-9]{0,6}$", re.IGNORECASE)
@@ -233,29 +227,10 @@ def submit_input(
 ) -> dict[str, str]:
     """NEEDS_INPUT 恢复：补充 CRS 后从阻塞步骤继续，无需重新上传。"""
     version = service.get_version_required(asset_id, version_id)
-    if version.status is not AssetVersionStatus.NEEDS_INPUT:
-        raise conflict(
-            code="ASSET_VERSION_NOT_NEEDS_INPUT",
-            detail=f"版本 {version_id} 不处于 NEEDS_INPUT 状态（当前 {version.status}）",
-        )
     normalized_crs = body.crs.strip().upper()
     if _EPSG_PATTERN.fullmatch(normalized_crs) is None:
         raise validation_error(f"CRS 不合法：{body.crs!r}（应为 EPSG:4326 这类 EPSG 代码）")
-
-    service.upsert_raster_ext(version_id, user_crs=normalized_crs)
-    service.set_version_status(version, AssetVersionStatus.PROCESSING)
-
-    session = service._session
-    job_row = session.scalars(
-        sa.select(Job).where(
-            Job.payload["asset_version_id"].astext == str(version_id),
-            Job.status == JobStatus.NEEDS_INPUT,
-        )
-    ).first()
-    if job_row is not None:
-        JobService(session).requeue(job_row)
-    else:
-        logger.warning("NEEDS_INPUT 恢复未找到对应 Job", extra={"version_id": str(version_id)})
+    service.resume_from_needs_input(version, user_crs=normalized_crs)
     return {"asset_version_id": str(version_id), "status": AssetVersionStatus.PROCESSING.value}
 
 
