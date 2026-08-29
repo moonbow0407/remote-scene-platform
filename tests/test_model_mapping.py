@@ -12,6 +12,7 @@ def test_all_mappers_configure_without_ambiguous_foreign_keys() -> None:
         "app.uploads.models",
         "app.catalogs.models",
         "app.ecology.models",
+        "app.vector_features.models",
     ):
         import_module(module)
     configure_mappers()

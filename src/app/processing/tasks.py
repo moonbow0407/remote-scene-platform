@@ -1,4 +1,4 @@
-"""Celery 任务定义：栅格入库。
+"""Celery 任务定义：栅格 / 矢量 / 附件入库。
 
 重试分类（架构不变量）：
 - TransientError/基础设施异常 → Job RETRYING，指数退避重新入队；
@@ -21,8 +21,11 @@ from app.assets.service import AssetService
 from app.db import create_engine, make_session_factory, session_scope
 from app.jobs.enums import JobStatus
 from app.jobs.service import JobService
+from app.processing.attachment_ingestion import AttachmentIngestion
+from app.processing.common import IngestionContext
 from app.processing.errors import DeterministicError, NeedsInputError, TransientError
-from app.processing.raster_ingestion import IngestionContext, RasterIngestion
+from app.processing.raster_ingestion import RasterIngestion
+from app.processing.vector_ingestion import VectorIngestion
 from app.settings import get_settings
 from app.uploads.minio import MinioAdapter, MinioError
 from app.worker.celery_app import celery
@@ -48,8 +51,7 @@ def _backoff_seconds(attempt: int) -> int:
     return min(5 * 2 ** max(0, attempt - 1), 300)
 
 
-@celery.task(name="processing.ingest_raster", bind=True, ignore_result=True)
-def ingest_raster(self: Task, job_id: str) -> None:
+def _execute_ingestion(self: Task, job_id: str, runner: Any, label: str) -> None:
     settings = get_settings()
     factory = _get_factory()
     job_uuid = UUID(job_id)
@@ -58,7 +60,6 @@ def ingest_raster(self: Task, job_id: str) -> None:
         jobs = JobService(session)
         claim = jobs.claim_for_run(job_uuid)
         if not claim.acquired:
-            # 其他 Worker 正在执行，或任务已终态：至少一次投递下必须跳过，不能凭 RUNNING 再跑一遍
             logger.info(
                 "任务重复投递，忽略",
                 extra={"job_id": job_id, "status": claim.job.status.value},
@@ -75,13 +76,11 @@ def ingest_raster(self: Task, job_id: str) -> None:
         source_size_bytes=int(payload["source_size_bytes"]),
         tmp_dir=Path(settings.worker_tmp_dir) / job_id,
     )
-    ingestion = RasterIngestion(
-        settings=settings, minio=MinioAdapter(settings), engine=_get_factory()
-    )
+    ingestion = runner(settings=settings, minio=MinioAdapter(settings), engine=_get_factory())
 
     try:
         ingestion.run(ctx)
-        logger.info("栅格入库完成", extra={"job_id": job_id})
+        logger.info(f"{label}入库完成", extra={"job_id": job_id})
         return
     except NeedsInputError as exc:
         with session_scope(factory) as session:
@@ -206,3 +205,18 @@ def ingest_raster(self: Task, job_id: str) -> None:
             )
         logger.exception("任务发生未分类处理错误，已按确定性失败终止", extra={"job_id": job_id})
         raise
+
+
+@celery.task(name="processing.ingest_raster", bind=True, ignore_result=True)
+def ingest_raster(self: Task, job_id: str) -> None:
+    _execute_ingestion(self, job_id, RasterIngestion, "栅格")
+
+
+@celery.task(name="processing.ingest_vector", bind=True, ignore_result=True)
+def ingest_vector(self: Task, job_id: str) -> None:
+    _execute_ingestion(self, job_id, VectorIngestion, "矢量")
+
+
+@celery.task(name="processing.ingest_attachment", bind=True, ignore_result=True)
+def ingest_attachment(self: Task, job_id: str) -> None:
+    _execute_ingestion(self, job_id, AttachmentIngestion, "附件")

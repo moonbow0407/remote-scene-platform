@@ -52,6 +52,34 @@ class RasterExtResponse(BaseModel):
     bbox: BBox | None
 
 
+class VectorExtResponse(BaseModel):
+    crs: str | None
+    user_crs: str | None
+    geometry_type: str | None
+    feature_count: int | None
+    native_format: str | None
+    property_schema: list[dict[str, Any]] | None
+    footprint_geojson: dict[str, Any] | None = None
+    bbox: BBox | None
+
+
+class AttachmentExtResponse(BaseModel):
+    mime_type: str | None
+    detected_format: str | None
+    original_file_name: str | None
+
+
+class PropertySchemaItem(BaseModel):
+    name: str
+    asset_type: AssetType | None
+    json_schema: dict[str, Any]
+
+
+class PropertySchemaUpsert(BaseModel):
+    json_schema: dict[str, Any]
+    asset_type: AssetType | None = None
+
+
 class ArtifactResponse(BaseModel):
     id: UUID
     kind: str
@@ -64,6 +92,8 @@ class VersionDetailResponse(VersionSummary):
     properties: dict[str, Any]
     diagnostics: dict[str, Any] | None
     raster: RasterExtResponse | None
+    vector: VectorExtResponse | None = None
+    attachment: AttachmentExtResponse | None = None
     artifacts: list[ArtifactResponse]
 
 

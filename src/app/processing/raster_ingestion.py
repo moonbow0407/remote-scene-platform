@@ -7,13 +7,9 @@
 开始前检查临时空间是否满足 源文件 × 倍数 的占用要求。
 """
 
-import hashlib
 import logging
-import shutil
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from uuid import UUID
 
 import rasterio
 from geoalchemy2 import WKTElement
@@ -27,6 +23,13 @@ from app.assets.service import AssetService
 from app.db import session_scope
 from app.jobs.enums import JobStatus
 from app.jobs.service import JobService
+from app.processing.blob import ensure_source_local, hash_dedup_original
+from app.processing.common import (
+    IngestionContext,
+    cleanup_tmp_dir,
+    is_complete_local_file,
+    preflight_tmp,
+)
 from app.processing.errors import DeterministicError, NeedsInputError, TransientError
 from app.processing.render_profile import infer_render_profile
 from app.settings import Settings
@@ -46,6 +49,10 @@ _THUMBNAIL_MAX_SIDE = 512
 def is_supported_tiff_magic(magic: bytes) -> bool:
     """判断文件头是否属于经典 TIFF 或 BigTIFF。"""
     return magic in _TIFF_MAGICS
+
+
+# 测试与历史 import 路径保持稳定
+_is_complete_local_file = is_complete_local_file
 
 
 def stretch_band_to_uint8(band_data: Any, nodata: float | None) -> Any:
@@ -69,58 +76,6 @@ def stretch_band_to_uint8(band_data: Any, nodata: float | None) -> Any:
     return stretched
 
 
-def write_chunks_atomically(path: Path, chunks: Any, hasher: Any) -> int:
-    """流式写入临时文件后原子替换，避免半成品被当成完整文件。"""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".partial")
-    size = 0
-    try:
-        with open(tmp, "wb") as handle:
-            for chunk in chunks:
-                handle.write(chunk)
-                hasher.update(chunk)
-                size += len(chunk)
-        tmp.replace(path)
-        return size
-    except Exception:
-        try:
-            tmp.unlink(missing_ok=True)
-        except OSError:
-            logger.warning("残留分片文件删除失败", extra={"path": str(tmp)})
-        raise
-
-
-def cleanup_tmp_dir(tmp_dir: Path) -> None:
-    """删除任务临时目录；失败只记日志，不掩盖主流程错误。"""
-    if not tmp_dir.exists():
-        return
-    try:
-        shutil.rmtree(tmp_dir)
-    except OSError as exc:
-        logger.warning("临时目录清理失败", extra={"tmp_dir": str(tmp_dir), "detail": str(exc)})
-
-
-@dataclass
-class IngestionContext:
-    job_id: UUID
-    version_id: UUID
-    source_object_key: str
-    source_size_bytes: int
-    tmp_dir: Path
-
-    @property
-    def source_path(self) -> Path:
-        return self.tmp_dir / "source"
-
-    @property
-    def cog_path(self) -> Path:
-        return self.tmp_dir / "cog.tif"
-
-    @property
-    def thumbnail_path(self) -> Path:
-        return self.tmp_dir / "thumbnail.png"
-
-
 class RasterIngestion:
     """一次任务运行内的流水线执行器；每步独立数据库事务。"""
 
@@ -132,7 +87,7 @@ class RasterIngestion:
     def run(self, ctx: IngestionContext) -> None:
         cleanup_tmp_dir(ctx.tmp_dir)
         try:
-            self._preflight(ctx)
+            preflight_tmp(ctx, self._settings)
             self._step_validate(ctx)
             self._step_hash_dedup(ctx)
             self._step_inspect(ctx)
@@ -167,86 +122,13 @@ class RasterIngestion:
 
     def _step_hash_dedup(self, ctx: IngestionContext) -> None:
         """流式下载并计算 SHA-256，按内容寻址落位或复用既有 blob。"""
-        with session_scope(self._engine) as session:
-            assets = AssetService(session)
-            version = assets.get_version_by_id(ctx.version_id)
-            if version is None:
-                raise DeterministicError("VERSION_MISSING", f"资产版本不存在：{ctx.version_id}")
-            if version.blob_id is not None:
-                assert version.blob is not None
-                canonical_key = version.blob.object_key
-                if self._minio.head_object(key=canonical_key) is None:
-                    source_stat = self._minio.head_object(key=ctx.source_object_key)
-                    if source_stat is None:
-                        raise DeterministicError(
-                            "BLOB_OBJECT_MISSING",
-                            f"版本已绑定 blob，但规范对象与上传源对象均不存在：{canonical_key}",
-                        )
-                    ctx.tmp_dir.mkdir(parents=True, exist_ok=True)
-                    self._minio.download_to_file(
-                        key=ctx.source_object_key, local_path=str(ctx.source_path)
-                    )
-                    self._minio.upload_file(
-                        local_path=str(ctx.source_path),
-                        key=canonical_key,
-                        content_type="image/tiff",
-                    )
-                assets.upsert_artifact(
-                    version_id=ctx.version_id,
-                    kind=ArtifactKind.ORIGINAL,
-                    object_key=canonical_key,
-                    size_bytes=version.blob.size_bytes,
-                    content_type="image/tiff",
-                )
-                logger.info("版本已绑定且已验证 blob", extra={"version_id": str(ctx.version_id)})
-                self._record_step(ctx, "hash_dedup")
-                return
-
-        digest = hashlib.sha256()
-        ctx.tmp_dir.mkdir(parents=True, exist_ok=True)
-        size = write_chunks_atomically(
-            ctx.source_path, self._minio.stream_download(key=ctx.source_object_key), digest
+        hash_dedup_original(
+            minio=self._minio, engine=self._engine, ctx=ctx, content_type="image/tiff"
         )
-        sha = digest.hexdigest()
-        canonical_key = f"original/{sha[:2]}/{sha[2:4]}/{sha}"
-
-        # 对象先可靠落位，再提交数据库引用；失败时最多留下可清理的无引用对象，
-        # 绝不能留下指向不存在对象的 READY 版本。upload_file 对大对象使用托管 Multipart。
-        if self._minio.head_object(key=canonical_key) is None:
-            self._minio.upload_file(
-                local_path=str(ctx.source_path), key=canonical_key, content_type="image/tiff"
-            )
-
-        with session_scope(self._engine) as session:
-            assets = AssetService(session)
-            blob, created = assets.get_or_create_blob(
-                sha256=sha, size_bytes=size, object_key=canonical_key
-            )
-            version = assets.get_version_by_id(ctx.version_id)
-            assert version is not None
-            assets.attach_blob(version, blob)
-            assets.upsert_artifact(
-                version_id=ctx.version_id,
-                kind=ArtifactKind.ORIGINAL,
-                object_key=canonical_key,
-                size_bytes=size,
-                content_type="image/tiff",
-            )
-
-        if created:
-            logger.info("新内容寻址对象已落位", extra={"sha256": sha, "key": canonical_key})
-        else:
-            logger.info("命中内容去重，复用既有 blob", extra={"sha256": sha})
-        # 内容已由 canonical 键持有，清理会话临时对象（尽力而为）
-        try:
-            self._minio.delete_object(key=ctx.source_object_key)
-        except Exception:
-            logger.warning("会话对象清理失败，等待后续清理", extra={"key": ctx.source_object_key})
-        self._record_step(ctx, "hash_dedup")
 
     def _step_inspect(self, ctx: IngestionContext) -> None:
         """读取栅格元数据并检查 CRS；缺失且未补充时抛 NeedsInputError（不落变更）。"""
-        self._ensure_source_local(ctx)
+        ensure_source_local(minio=self._minio, engine=self._engine, ctx=ctx)
         with session_scope(self._engine) as session:
             assets = AssetService(session)
             version = assets.get_version_by_id(ctx.version_id)
@@ -317,7 +199,7 @@ class RasterIngestion:
             ext = assets.get_raster_ext(ctx.version_id)
             user_crs = ext.user_crs if ext is not None else None
 
-        self._ensure_source_local(ctx)
+        ensure_source_local(minio=self._minio, engine=self._engine, ctx=ctx)
         cog_tmp = ctx.cog_path
         rio_copy(
             str(ctx.source_path), str(cog_tmp), driver="COG", compress="DEFLATE", blocksize=512
@@ -412,7 +294,7 @@ class RasterIngestion:
                 self._record_step(ctx, "footprint")
                 return
             crs_text = ext.crs
-        self._ensure_source_local(ctx)
+        ensure_source_local(minio=self._minio, engine=self._engine, ctx=ctx)
         with rasterio.open(ctx.source_path) as src:
             bounds = src.bounds
         transformer = Transformer.from_crs(crs_text, "EPSG:4326", always_xy=True)
@@ -453,32 +335,6 @@ class RasterIngestion:
 
     # ---- 辅助 ----
 
-    def _preflight(self, ctx: IngestionContext) -> None:
-        """临时空间预检：不足时早期失败，避免 GDAL 中途写满磁盘。"""
-        ctx.tmp_dir.mkdir(parents=True, exist_ok=True)
-        usage = shutil.disk_usage(ctx.tmp_dir)
-        required = ctx.source_size_bytes * self._settings.worker_tmp_min_ratio
-        if usage.free < required:
-            raise TransientError(
-                f"临时空间不足：可用 {usage.free} 字节，任务需要约 {required:.0f} 字节"
-            )
-
-    def _ensure_source_local(self, ctx: IngestionContext) -> Path:
-        key = ctx.source_object_key
-        expected_size = ctx.source_size_bytes
-        with session_scope(self._engine) as session:
-            assets = AssetService(session)
-            version = assets.get_version_by_id(ctx.version_id)
-            assert version is not None
-            if version.blob is not None:
-                key = version.blob.object_key
-                expected_size = version.blob.size_bytes
-        if _is_complete_local_file(ctx.source_path, expected_size):
-            return ctx.source_path
-        ctx.tmp_dir.mkdir(parents=True, exist_ok=True)
-        self._minio.download_to_file(key=key, local_path=str(ctx.source_path))
-        return ctx.source_path
-
     def _ensure_cog_local(self, ctx: IngestionContext) -> Path:
         with session_scope(self._engine) as session:
             assets = AssetService(session)
@@ -500,10 +356,3 @@ class RasterIngestion:
                 )
         except Exception:
             logger.warning("步骤事件记录失败", extra={"step": step, "job_id": str(ctx.job_id)})
-
-
-def _is_complete_local_file(path: Path, expected_size: int) -> bool:
-    try:
-        return path.is_file() and path.stat().st_size == expected_size
-    except OSError:
-        return False

@@ -92,6 +92,12 @@ class AssetVersion(Base, TimestampMixin):
     raster: Mapped["RasterAssetVersion | None"] = relationship(
         back_populates="version", uselist=False
     )
+    vector: Mapped["VectorAssetVersion | None"] = relationship(
+        back_populates="version", uselist=False
+    )
+    attachment: Mapped["AttachmentAssetVersion | None"] = relationship(
+        back_populates="version", uselist=False
+    )
     artifacts: Mapped[list["AssetArtifact"]] = relationship(back_populates="version")
 
     __table_args__ = (
@@ -148,6 +154,71 @@ class RasterAssetVersion(Base):
     version: Mapped[AssetVersion] = relationship(back_populates="raster")
 
     __table_args__ = (sa.Index("ix_raster_footprint", "footprint", postgresql_using="gist"),)
+
+
+class VectorAssetVersion(Base):
+    """矢量类型扩展：源 CRS、几何类型、要素数、属性结构与 EPSG:4326 范围。"""
+
+    __tablename__ = "vector_asset_version"
+
+    asset_version_id: Mapped[Any] = mapped_column(
+        ForeignKey("asset_version.id", ondelete="CASCADE"), primary_key=True
+    )
+    crs: Mapped[str | None] = mapped_column(sa.String(128), nullable=True)
+    user_crs: Mapped[str | None] = mapped_column(
+        sa.String(128), nullable=True, comment="用户经 NEEDS_INPUT 流程补充的 CRS"
+    )
+    geometry_type: Mapped[str | None] = mapped_column(
+        sa.String(32), nullable=True, comment="Point/LineString/Polygon/Geometry 等"
+    )
+    feature_count: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
+    native_format: Mapped[str | None] = mapped_column(
+        sa.String(32), nullable=True, comment="GEOJSON/SHAPEFILE_ZIP/GEOPACKAGE"
+    )
+    property_schema: Mapped[list[Any] | None] = mapped_column(
+        JSONB, nullable=True, comment="[{name, types}]"
+    )
+    footprint: Mapped[WKTElement | None] = mapped_column(
+        Geometry(geometry_type="POLYGON", srid=4326), nullable=True
+    )
+    min_x: Mapped[float | None] = mapped_column(sa.Float, nullable=True)
+    min_y: Mapped[float | None] = mapped_column(sa.Float, nullable=True)
+    max_x: Mapped[float | None] = mapped_column(sa.Float, nullable=True)
+    max_y: Mapped[float | None] = mapped_column(sa.Float, nullable=True)
+
+    version: Mapped[AssetVersion] = relationship(back_populates="vector")
+
+    __table_args__ = (sa.Index("ix_vector_footprint", "footprint", postgresql_using="gist"),)
+
+
+class AttachmentAssetVersion(Base):
+    """普通附件扩展：不触发地理处理。"""
+
+    __tablename__ = "attachment_asset_version"
+
+    asset_version_id: Mapped[Any] = mapped_column(
+        ForeignKey("asset_version.id", ondelete="CASCADE"), primary_key=True
+    )
+    mime_type: Mapped[str | None] = mapped_column(sa.String(128), nullable=True)
+    detected_format: Mapped[str | None] = mapped_column(sa.String(32), nullable=True)
+    original_file_name: Mapped[str | None] = mapped_column(sa.String(512), nullable=True)
+
+    version: Mapped[AssetVersion] = relationship(back_populates="attachment")
+
+
+class PropertySchema(Base, TimestampMixin):
+    """可注册的 JSON Schema，按名称唯一；asset_type 为空表示通用。"""
+
+    __tablename__ = "property_schema"
+
+    id: Mapped[Any] = mapped_column(sa.Uuid, primary_key=True)
+    name: Mapped[str] = mapped_column(sa.String(128), nullable=False, unique=True)
+    asset_type: Mapped[AssetType | None] = mapped_column(
+        sa.Enum(AssetType, native_enum=False, length=16), nullable=True
+    )
+    schema: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, comment="JSON Schema 对象"
+    )
 
 
 class AssetArtifact(Base):

@@ -26,6 +26,7 @@ from app.logging import configure_logging, trace_id_var
 from app.settings import get_settings
 from app.tiles.router import router as tiles_router
 from app.uploads.router import router as uploads_router
+from app.vector_features.router import router as features_router
 
 from .health import router as ops_router
 from .middleware import TraceAccessMiddleware
@@ -92,6 +93,7 @@ def create_app() -> FastAPI:
     app.include_router(uploads_router, prefix=API_V1_PREFIX)
     app.include_router(jobs_router, prefix=API_V1_PREFIX)
     app.include_router(tiles_router, prefix=API_V1_PREFIX)
+    app.include_router(features_router, prefix=API_V1_PREFIX)
     app.include_router(catalogs_router, prefix=API_V1_PREFIX)
     app.include_router(ecology_router, prefix=API_V1_PREFIX)
 

@@ -5,9 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from app.processing.raster_ingestion import (
-    _is_complete_local_file,
+from app.processing.common import (
     cleanup_tmp_dir,
+    is_complete_local_file,
     write_chunks_atomically,
 )
 
@@ -15,10 +15,10 @@ from app.processing.raster_ingestion import (
 def test_incomplete_local_file_is_not_treated_as_complete(tmp_path: Path) -> None:
     path = tmp_path / "source"
     path.write_bytes(b"abc")
-    assert not _is_complete_local_file(path, expected_size=8)
+    assert not is_complete_local_file(path, expected_size=8)
     path.write_bytes(b"abcdefgh")
-    assert _is_complete_local_file(path, expected_size=8)
-    assert not _is_complete_local_file(tmp_path / "missing", expected_size=8)
+    assert is_complete_local_file(path, expected_size=8)
+    assert not is_complete_local_file(tmp_path / "missing", expected_size=8)
 
 
 def test_write_chunks_atomically_leaves_no_partial_on_failure(tmp_path: Path) -> None:

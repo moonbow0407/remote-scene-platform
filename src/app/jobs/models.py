@@ -28,7 +28,7 @@ class Job(Base, TimestampMixin):
     job_type: Mapped[JobType] = mapped_column(
         sa.Enum(JobType, native_enum=False, length=32),
         nullable=False,
-        comment="任务类型，首版 RASTER_INGESTION",
+        comment="任务类型：RASTER_INGESTION/VECTOR_INGESTION/ATTACHMENT_INGESTION",
     )
     status: Mapped[JobStatus] = mapped_column(
         sa.Enum(JobStatus, native_enum=False, length=32),

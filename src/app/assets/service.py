@@ -20,7 +20,21 @@ from app.assets.enums import (
     AssetType,
     AssetVersionStatus,
 )
-from app.assets.models import AssetArtifact, AssetVersion, DataAsset, ObjectBlob, RasterAssetVersion
+from app.assets.models import (
+    AssetArtifact,
+    AssetVersion,
+    AttachmentAssetVersion,
+    DataAsset,
+    ObjectBlob,
+    PropertySchema,
+    RasterAssetVersion,
+    VectorAssetVersion,
+)
+from app.assets.property_schema import (
+    DEFAULT_PROPERTY_SCHEMAS,
+    default_schema_name,
+    validate_properties,
+)
 from app.assets.version_state import is_version_transition_allowed
 from app.context import ActorContext, get_actor
 from app.errors import conflict, not_found
@@ -45,6 +59,7 @@ class AssetService:
         actor: ActorContext | None = None,
     ) -> DataAsset:
         actor = actor or get_actor()
+        self.validate_asset_properties(asset_type, properties or {})
         asset = DataAsset(
             id=new_uuid7(),
             name=name,
@@ -200,6 +215,75 @@ class AssetService:
     def get_raster_ext(self, version_id: UUID) -> RasterAssetVersion | None:
         return self._session.get(RasterAssetVersion, version_id)
 
+    def upsert_vector_ext(self, version_id: UUID, **fields: Any) -> VectorAssetVersion:
+        ext = self._session.get(VectorAssetVersion, version_id)
+        if ext is None:
+            ext = VectorAssetVersion(asset_version_id=version_id)
+            self._session.add(ext)
+        for key, value in fields.items():
+            if value is not None:
+                setattr(ext, key, value)
+        self._session.flush()
+        return ext
+
+    def get_vector_ext(self, version_id: UUID) -> VectorAssetVersion | None:
+        return self._session.get(VectorAssetVersion, version_id)
+
+    def upsert_attachment_ext(self, version_id: UUID, **fields: Any) -> AttachmentAssetVersion:
+        ext = self._session.get(AttachmentAssetVersion, version_id)
+        if ext is None:
+            ext = AttachmentAssetVersion(asset_version_id=version_id)
+            self._session.add(ext)
+        for key, value in fields.items():
+            if value is not None:
+                setattr(ext, key, value)
+        self._session.flush()
+        return ext
+
+    def get_attachment_ext(self, version_id: UUID) -> AttachmentAssetVersion | None:
+        return self._session.get(AttachmentAssetVersion, version_id)
+
+    def validate_asset_properties(
+        self, asset_type: AssetType, properties: dict[str, Any]
+    ) -> None:
+        row = self._session.scalar(
+            sa.select(PropertySchema)
+            .where(
+                sa.or_(
+                    PropertySchema.name == default_schema_name(asset_type),
+                    PropertySchema.asset_type == asset_type,
+                )
+            )
+            .order_by(PropertySchema.updated_at.desc())
+        )
+        schema = row.schema if row is not None else DEFAULT_PROPERTY_SCHEMAS[asset_type]
+        validate_properties(schema, properties)
+
+    def register_property_schema(
+        self,
+        *,
+        name: str,
+        schema: dict[str, Any],
+        asset_type: AssetType | None,
+    ) -> PropertySchema:
+        existing = self._session.scalar(
+            sa.select(PropertySchema).where(PropertySchema.name == name)
+        )
+        if existing is not None:
+            existing.schema = schema
+            existing.asset_type = asset_type
+            self._session.flush()
+            return existing
+        row = PropertySchema(
+            id=new_uuid7(), name=name, asset_type=asset_type, schema=schema
+        )
+        self._session.add(row)
+        self._session.flush()
+        return row
+
+    def list_property_schemas(self) -> list[PropertySchema]:
+        return list(self._session.scalars(sa.select(PropertySchema).order_by(PropertySchema.name)))
+
     def upsert_artifact(
         self,
         *,
@@ -247,17 +331,24 @@ class AssetService:
             sa.select(AssetVersion, DataAsset)
             .join(DataAsset, DataAsset.id == AssetVersion.asset_id)
             .outerjoin(RasterAssetVersion, RasterAssetVersion.asset_version_id == AssetVersion.id)
+            .outerjoin(VectorAssetVersion, VectorAssetVersion.asset_version_id == AssetVersion.id)
         )
         count_stmt = (
             sa.select(sa.func.count())
             .select_from(AssetVersion)
             .join(DataAsset, DataAsset.id == AssetVersion.asset_id)
             .outerjoin(RasterAssetVersion, RasterAssetVersion.asset_version_id == AssetVersion.id)
+            .outerjoin(VectorAssetVersion, VectorAssetVersion.asset_version_id == AssetVersion.id)
         )
         conditions: list[sa.ColumnElement[bool]] = []
         if geometry_wkt is not None:
             geom = WKTElement(geometry_wkt, srid=4326)
-            conditions.append(sa.func.ST_Intersects(RasterAssetVersion.footprint, geom))
+            conditions.append(
+                sa.or_(
+                    sa.func.ST_Intersects(RasterAssetVersion.footprint, geom),
+                    sa.func.ST_Intersects(VectorAssetVersion.footprint, geom),
+                )
+            )
         if asset_type is not None:
             conditions.append(DataAsset.asset_type == asset_type)
         if version_status is not None:
@@ -331,6 +422,10 @@ class AssetService:
                     "拒绝将版本改为 PROCESSING"
                 ),
             )
-        self.upsert_raster_ext(locked.id, user_crs=user_crs)
+        asset = self.get_asset_required(locked.asset_id)
+        if asset.asset_type is AssetType.VECTOR:
+            self.upsert_vector_ext(locked.id, user_crs=user_crs)
+        else:
+            self.upsert_raster_ext(locked.id, user_crs=user_crs)
         self.set_version_status(locked, AssetVersionStatus.PROCESSING)
         JobService(self._session).requeue(job)

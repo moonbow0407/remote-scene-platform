@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.context import now_utc
 from app.ids import new_uuid7
-from app.jobs.enums import JobStatus, JobType, OutboxStatus
+from app.jobs.enums import TASK_BY_JOB_TYPE, JobStatus, JobType, OutboxStatus
 from app.jobs.models import Job, JobEvent, OutboxEvent
 from app.jobs.state_machine import is_transition_allowed
 
@@ -69,7 +69,7 @@ class JobService:
             aggregate_id=job_id,
             event_type="job.dispatch",
             payload={
-                "task": "processing.ingest_raster",
+                "task": TASK_BY_JOB_TYPE[job_type],
                 "args": [str(job_id)],
                 "job_id": str(job_id),
             },
@@ -151,7 +151,7 @@ class JobService:
             aggregate_id=job.id,
             event_type="job.dispatch",
             payload={
-                "task": "processing.ingest_raster",
+                "task": TASK_BY_JOB_TYPE[job.job_type],
                 "args": [str(job.id)],
                 "job_id": str(job.id),
             },

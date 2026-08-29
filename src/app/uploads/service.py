@@ -90,23 +90,26 @@ class UploadService:
         content_type: str | None,
         properties: dict[str, Any],
         source: AssetSource,
+        asset_id: UUID | None = None,
     ) -> tuple[UploadSession, list[dict[str, Any]]]:
-        """创建逻辑资产 + 上传会话，并生成全部分片预签名 URL（同一事务）。"""
-        if asset_type is not AssetType.RASTER:
-            # Stage 3 在共享资产生命周期上增加矢量与附件，此处显式拒绝而非静默接受
-            raise validation_error(
-                f"资产类型 {asset_type.value} 暂不支持上传；"
-                "首版先交付栅格（Stage 3 扩展矢量与附件）"
-            )
-        # 会话对象键在数据库主键生成后确定，先取 UUID
+        """创建逻辑资产（或追加到已有资产）+ 上传会话，并生成全部分片预签名 URL。"""
+        if asset_type not in (AssetType.RASTER, AssetType.VECTOR, AssetType.ATTACHMENT):
+            raise validation_error(f"资产类型 {asset_type.value} 不受支持")
         session_id = new_uuid7()
         safe_name = _sanitize_file_name(file_name)
         object_key = f"uploads/{session_id}/{safe_name}"
 
         upload_id = self._minio.create_multipart_upload(key=object_key, content_type=content_type)
-        asset = self._assets.create_asset(
-            name=asset_name, asset_type=asset_type, source=source, properties=properties
-        )
+        if asset_id is not None:
+            asset = self._assets.get_asset_required(asset_id)
+            if asset.asset_type is not asset_type:
+                raise validation_error(
+                    f"不能把 {asset_type.value} 文件追加到 {asset.asset_type.value} 资产 {asset_id}"
+                )
+        else:
+            asset = self._assets.create_asset(
+                name=asset_name, asset_type=asset_type, source=source, properties=properties
+            )
         session = UploadSession(
             id=session_id,
             asset_id=asset.id,
@@ -223,7 +226,7 @@ class UploadService:
             status=AssetVersionStatus.VALIDATING,
         )
         job, _event = self._jobs.create_job_with_outbox(
-            job_type=JobType.RASTER_INGESTION,
+            job_type=_job_type_for(asset.asset_type),
             asset_version_id=version.id,
             payload={
                 "asset_version_id": str(version.id),
@@ -279,3 +282,12 @@ class UploadService:
         session.status = UploadSessionStatus.ABORTED
         self._session.flush()
         return session
+
+
+def _job_type_for(asset_type: AssetType) -> JobType:
+    mapping = {
+        AssetType.RASTER: JobType.RASTER_INGESTION,
+        AssetType.VECTOR: JobType.VECTOR_INGESTION,
+        AssetType.ATTACHMENT: JobType.ATTACHMENT_INGESTION,
+    }
+    return mapping[asset_type]

@@ -16,11 +16,15 @@ from app.assets.models import AssetVersion
 from app.assets.schemas import (
     ArtifactResponse,
     AssetDetailResponse,
+    AttachmentExtResponse,
     BBox,
+    PropertySchemaItem,
+    PropertySchemaUpsert,
     RasterExtResponse,
     SearchItem,
     SearchRequest,
     SubmitInputRequest,
+    VectorExtResponse,
     VersionDetailResponse,
     VersionSummary,
 )
@@ -61,6 +65,35 @@ def _bbox_of(ext: Any) -> BBox | None:
     if ext is None or ext.min_x is None:
         return None
     return BBox(min_x=ext.min_x, min_y=ext.min_y, max_x=ext.max_x, max_y=ext.max_y)
+
+
+def _footprint_geojson(service: AssetService, geom: Any) -> dict[str, Any] | None:
+    if geom is None:
+        return None
+    row = service._session.execute(sa.select(sa.func.ST_AsGeoJSON(geom))).scalar()
+    return json.loads(row) if row else None
+
+
+@router.get("/property-schemas", response_model=list[PropertySchemaItem])
+def list_property_schemas(
+    service: Annotated[AssetService, Depends(_service)],
+) -> list[PropertySchemaItem]:
+    return [
+        PropertySchemaItem(name=row.name, asset_type=row.asset_type, json_schema=row.schema)
+        for row in service.list_property_schemas()
+    ]
+
+
+@router.put("/property-schemas/{name}", response_model=PropertySchemaItem)
+def upsert_property_schema(
+    name: str,
+    body: PropertySchemaUpsert,
+    service: Annotated[AssetService, Depends(_service)],
+) -> PropertySchemaItem:
+    row = service.register_property_schema(
+        name=name, schema=body.json_schema, asset_type=body.asset_type
+    )
+    return PropertySchemaItem(name=row.name, asset_type=row.asset_type, json_schema=row.schema)
 
 
 @router.get("/{asset_id}", response_model=AssetDetailResponse)
@@ -118,10 +151,6 @@ def get_version(
     ext = service.get_raster_ext(version_id)
     raster = None
     if ext is not None:
-        footprint_geojson = None
-        if ext.footprint is not None:
-            row = service._session.execute(sa.select(sa.func.ST_AsGeoJSON(ext.footprint))).scalar()
-            footprint_geojson = json.loads(row) if row else None
         raster = RasterExtResponse(
             crs=ext.crs,
             user_crs=ext.user_crs,
@@ -133,8 +162,29 @@ def get_version(
             resolution_y=float(ext.resolution_y) if ext.resolution_y is not None else None,
             nodata=ext.nodata,
             render_profile=ext.render_profile,
-            footprint_geojson=footprint_geojson,
+            footprint_geojson=_footprint_geojson(service, ext.footprint),
             bbox=_bbox_of(ext),
+        )
+    vector_ext = service.get_vector_ext(version_id)
+    vector = None
+    if vector_ext is not None:
+        vector = VectorExtResponse(
+            crs=vector_ext.crs,
+            user_crs=vector_ext.user_crs,
+            geometry_type=vector_ext.geometry_type,
+            feature_count=vector_ext.feature_count,
+            native_format=vector_ext.native_format,
+            property_schema=vector_ext.property_schema,
+            footprint_geojson=_footprint_geojson(service, vector_ext.footprint),
+            bbox=_bbox_of(vector_ext),
+        )
+    attachment_ext = service.get_attachment_ext(version_id)
+    attachment = None
+    if attachment_ext is not None:
+        attachment = AttachmentExtResponse(
+            mime_type=attachment_ext.mime_type,
+            detected_format=attachment_ext.detected_format,
+            original_file_name=attachment_ext.original_file_name,
         )
     artifacts = service.list_artifacts(version_id)
     return VersionDetailResponse(
@@ -142,6 +192,8 @@ def get_version(
         properties=version.properties,
         diagnostics=version.diagnostics,
         raster=raster,
+        vector=vector,
+        attachment=attachment,
         artifacts=[
             ArtifactResponse(
                 id=a.id,
@@ -202,7 +254,7 @@ def search(
     )
     items = []
     for version, asset in rows:
-        ext = service.get_raster_ext(version.id)
+        ext = service.get_raster_ext(version.id) or service.get_vector_ext(version.id)
         items.append(
             SearchItem(
                 asset_id=asset.id,

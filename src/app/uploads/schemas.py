@@ -11,12 +11,15 @@ from app.uploads.models import UploadSessionStatus
 
 class CreateSessionRequest(BaseModel):
     asset_name: str = Field(min_length=1, max_length=255, description="逻辑资产名称")
-    asset_type: AssetType = Field(description="物理类型：栅格/矢量/附件（首版仅栅格）")
+    asset_type: AssetType = Field(description="物理类型：栅格/矢量/附件")
     file_name: str = Field(min_length=1, max_length=512, description="原始文件名")
     size_bytes: int = Field(gt=0, description="文件总字节数")
     part_count: int = Field(ge=1, le=10000, description="分片数量（1..10000）")
     content_type: str | None = Field(default=None, max_length=128)
     source: AssetSource = Field(default=AssetSource.UPLOAD, description="资产来源")
+    asset_id: UUID | None = Field(
+        default=None, description="为已有资产追加新版本；空则创建新逻辑资产"
+    )
     properties: dict[str, Any] = Field(
         default_factory=dict, description="业务元数据，可含 ISO8601 acquired_at"
     )

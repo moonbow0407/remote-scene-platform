@@ -8,6 +8,7 @@ from app.db import Base
 from app.jobs import models as _jobs_models  # noqa: F401
 from app.settings import get_settings
 from app.uploads import models as _uploads_models  # noqa: F401
+from app.vector_features import models as _vector_models  # noqa: F401
 
 # 导入全部模型模块，使 Base.metadata 包含完整表定义（自动生成迁移依赖）
 target_metadata = Base.metadata

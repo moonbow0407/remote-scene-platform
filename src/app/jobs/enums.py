@@ -14,6 +14,15 @@ from enum import StrEnum
 
 class JobType(StrEnum):
     RASTER_INGESTION = "RASTER_INGESTION"
+    VECTOR_INGESTION = "VECTOR_INGESTION"
+    ATTACHMENT_INGESTION = "ATTACHMENT_INGESTION"
+
+
+TASK_BY_JOB_TYPE: dict[JobType, str] = {
+    JobType.RASTER_INGESTION: "processing.ingest_raster",
+    JobType.VECTOR_INGESTION: "processing.ingest_vector",
+    JobType.ATTACHMENT_INGESTION: "processing.ingest_attachment",
+}
 
 
 class JobStatus(StrEnum):

@@ -60,6 +60,7 @@ def create_session(
         content_type=body.content_type,
         properties=body.properties,
         source=body.source,
+        asset_id=body.asset_id,
     )
     return SessionCreatedResponse(
         session_id=session.id,

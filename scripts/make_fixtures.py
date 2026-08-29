@@ -156,6 +156,110 @@ def make_polygon_shapefile_zip() -> None:
     print(f"written {zip_path}")
 
 
+def make_lines_gpkg() -> None:
+    """X6：EPSG:3857 的 30 个 LineString GeoPackage，10 个属性列。"""
+    import sqlite3
+    import struct
+
+    from shapely import to_wkb
+    from shapely.geometry import LineString
+
+    path = FIXTURES / "lines.gpkg"
+    if path.exists():
+        path.unlink()
+    conn = sqlite3.connect(path)
+    conn.execute("PRAGMA application_id = 1196444487")
+    conn.execute("PRAGMA user_version = 10200")
+    conn.executescript(
+        """
+        CREATE TABLE gpkg_spatial_ref_sys (
+            srs_name TEXT NOT NULL,
+            srs_id INTEGER NOT NULL PRIMARY KEY,
+            organization TEXT NOT NULL,
+            organization_coordsys_id INTEGER NOT NULL,
+            definition TEXT NOT NULL,
+            description TEXT
+        );
+        CREATE TABLE gpkg_contents (
+            table_name TEXT NOT NULL PRIMARY KEY,
+            data_type TEXT NOT NULL,
+            identifier TEXT UNIQUE,
+            description TEXT DEFAULT '',
+            last_change DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+            min_x DOUBLE, min_y DOUBLE, max_x DOUBLE, max_y DOUBLE,
+            srs_id INTEGER
+        );
+        CREATE TABLE gpkg_geometry_columns (
+            table_name TEXT NOT NULL,
+            column_name TEXT NOT NULL,
+            geometry_type_name TEXT NOT NULL,
+            srs_id INTEGER NOT NULL,
+            z TINYINT NOT NULL,
+            m TINYINT NOT NULL,
+            CONSTRAINT pk_geom_cols PRIMARY KEY (table_name, column_name)
+        );
+        CREATE TABLE lines (
+            fid INTEGER PRIMARY KEY AUTOINCREMENT,
+            geom BLOB,
+            name TEXT,
+            length_m INTEGER,
+            kind TEXT,
+            group_id INTEGER,
+            source TEXT,
+            year INTEGER,
+            code TEXT,
+            flag INTEGER,
+            weight REAL,
+            remark TEXT
+        );
+        """
+    )
+    conn.execute(
+        "INSERT INTO gpkg_spatial_ref_sys VALUES (?,?,?,?,?,?)",
+        (
+            "Web Mercator",
+            3857,
+            "EPSG",
+            3857,
+            'PROJCS["WGS 84 / Pseudo-Mercator"]',
+            "EPSG:3857",
+        ),
+    )
+    conn.execute(
+        "INSERT INTO gpkg_contents(table_name,data_type,identifier,min_x,min_y,max_x,max_y,srs_id) "
+        "VALUES ('lines','features','lines',12690000,3500000,12770000,3580000,3857)"
+    )
+    conn.execute(
+        "INSERT INTO gpkg_geometry_columns VALUES ('lines','geom','LINESTRING',3857,0,0)"
+    )
+    for i in range(30):
+        x0 = 12690000 + (i % 6) * 10000
+        y0 = 3500000 + (i // 6) * 10000
+        geom = LineString([(x0, y0), (x0 + 8000, y0 + 4000), (x0 + 16000, y0)])
+        header = b"GP" + bytes((0, 0x01)) + struct.pack("<i", 3857)
+        blob = header + to_wkb(geom, hex=False, include_srid=False)
+        conn.execute(
+            "INSERT INTO lines(geom,name,length_m,kind,group_id,source,year,"
+            "code,flag,weight,remark) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                blob,
+                f"line-{i:02d}",
+                24000,
+                None,
+                i // 6,
+                "fixture",
+                2026,
+                f"L{i:02d}",
+                i % 2,
+                1.5 + i,
+                f"remark-{i}",
+            ),
+        )
+    conn.commit()
+    conn.close()
+    print(f"written {path}")
+
+
 def make_lines_geojson_3857() -> None:
     """X6 源：EPSG:3857 的 30 个 LineString；GeoPackage 由 ogr2ogr 转换生成。"""
     path = FIXTURES / "lines_3857.geojson"
@@ -208,4 +312,5 @@ if __name__ == "__main__":
     make_points_geojson()
     make_polygon_shapefile_zip()
     make_lines_geojson_3857()
+    make_lines_gpkg()
     make_attachment()
