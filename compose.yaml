@@ -75,6 +75,8 @@ services:
       AWS_VIRTUAL_HOSTING: "FALSE"
       AWS_HTTPS: "NO"
       WEB_CONCURRENCY: "2"
+      # TiTiler 仍接收去前缀后的内部路径，但生成外部 URL 时必须带受控网关前缀。
+      TITILER_API_ROOT_PATH: /tiles
     restart: unless-stopped
 
   api:

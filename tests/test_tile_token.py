@@ -1,9 +1,12 @@
 """瓦片令牌签发与校验行为。"""
 
+from urllib.parse import parse_qs, urlsplit
+
 import pytest
 
 from app.errors import ProblemError
 from app.tiles.service import (
+    build_tile_url_template,
     extract_resource_from_uri,
     extract_token_from_uri,
     sign_tile_token,
@@ -74,3 +77,39 @@ def test_missing_token_in_uri_rejected() -> None:
 def test_invalid_resource_in_uri_rejected() -> None:
     with pytest.raises(ProblemError):
         extract_resource_from_uri("/tiles/cog/tiles/9/123/456.png?url=http%3A%2F%2Fexample.com")
+
+
+def test_build_tile_urls_match_titiler_and_include_render_bands() -> None:
+    urls = build_tile_url_template(
+        base_url="http://localhost:8080",
+        cog_object_key="artifacts/version/cog.tif",
+        bucket="remote-scene",
+        token="v1.version.expires.signature",
+        band_indexes=[1, 2, 3],
+    )
+
+    tile_url = urlsplit(urls["tile_url_template"])
+    assert tile_url.path == (
+        "/tiles/cog/tiles/WebMercatorQuad/{z}/{x}/{y}.png"
+    )
+    assert parse_qs(tile_url.query) == {
+        "url": [RESOURCE],
+        "bidx": ["1", "2", "3"],
+        "token": ["v1.version.expires.signature"],
+    }
+
+    tile_json_url = urlsplit(urls["tile_json_url"])
+    assert tile_json_url.path == "/tiles/cog/WebMercatorQuad/tilejson.json"
+    assert parse_qs(tile_json_url.query)["bidx"] == ["1", "2", "3"]
+
+
+@pytest.mark.parametrize("band_indexes", [[], [0], [-1, 1]])
+def test_build_tile_urls_reject_invalid_band_indexes(band_indexes: list[int]) -> None:
+    with pytest.raises(ValueError):
+        build_tile_url_template(
+            base_url="http://localhost:8080",
+            cog_object_key="artifacts/version/cog.tif",
+            bucket="remote-scene",
+            token="token",
+            band_indexes=band_indexes,
+        )

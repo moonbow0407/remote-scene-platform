@@ -9,7 +9,7 @@ import hashlib
 import hmac
 import time
 from typing import Any
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, urlencode, urlsplit
 
 from app.context import now_utc
 from app.errors import ProblemError
@@ -82,16 +82,27 @@ def extract_resource_from_uri(uri: str) -> str:
 
 
 def build_tile_url_template(
-    *, base_url: str, cog_object_key: str, bucket: str, token: str
+    *,
+    base_url: str,
+    cog_object_key: str,
+    bucket: str,
+    token: str,
+    band_indexes: list[int],
 ) -> dict[str, Any]:
     """生成经 Nginx 网关的瓦片 URL 模板（TiTiler /cog 路由）。"""
-    from urllib.parse import quote
+    if not band_indexes or any(index < 1 for index in band_indexes):
+        raise ValueError("瓦片波段索引必须为非空正整数列表")
 
     s3_url = f"s3://{bucket}/{cog_object_key}"
-    query = f"url={quote(s3_url, safe='')}&token={token}"
+    query = urlencode(
+        [("url", s3_url), *(("bidx", str(index)) for index in band_indexes), ("token", token)]
+    )
     return {
-        "tile_url_template": f"{base_url}/tiles/cog/tiles/{{z}}/{{x}}/{{y}}@1x.png?{query}",
-        "tile_json_url": f"{base_url}/tiles/cog/tilejson.json?{query}",
+        "tile_url_template": (
+            f"{base_url}/tiles/cog/tiles/WebMercatorQuad/"
+            f"{{z}}/{{x}}/{{y}}.png?{query}"
+        ),
+        "tile_json_url": f"{base_url}/tiles/cog/WebMercatorQuad/tilejson.json?{query}",
     }
 
 

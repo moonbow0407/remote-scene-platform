@@ -34,8 +34,18 @@ from app.uploads.minio import MinioAdapter
 
 logger = logging.getLogger(__name__)
 
-_TIFF_MAGICS = (b"II*\x00", b"MM\x00*")
+_TIFF_MAGICS = (
+    b"II*\x00",  # 经典 TIFF，小端序
+    b"MM\x00*",  # 经典 TIFF，大端序
+    b"II+\x00",  # BigTIFF，小端序
+    b"MM\x00+",  # BigTIFF，大端序
+)
 _THUMBNAIL_MAX_SIDE = 512
+
+
+def is_supported_tiff_magic(magic: bytes) -> bool:
+    """判断文件头是否属于经典 TIFF 或 BigTIFF。"""
+    return magic in _TIFF_MAGICS
 
 
 @dataclass
@@ -92,7 +102,7 @@ class RasterIngestion:
                 f"源对象大小 {stat['size']} 与登记大小 {ctx.source_size_bytes} 不一致",
             )
         magic = self._minio.read_head_bytes(key=ctx.source_object_key, length=4)
-        if magic not in _TIFF_MAGICS:
+        if not is_supported_tiff_magic(magic):
             raise DeterministicError(
                 "UNSUPPORTED_FORMAT",
                 f"文件魔数 {magic!r} 不是 GeoTIFF；首版仅支持栅格 TIFF 输入",
