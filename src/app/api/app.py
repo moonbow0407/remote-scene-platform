@@ -17,7 +17,9 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.assets.router import router as assets_router
+from app.catalogs.router import router as catalogs_router
 from app.db import create_engine, make_session_factory
+from app.ecology.router import router as ecology_router
 from app.errors import ProblemError
 from app.jobs.router import router as jobs_router
 from app.logging import configure_logging, trace_id_var
@@ -90,6 +92,8 @@ def create_app() -> FastAPI:
     app.include_router(uploads_router, prefix=API_V1_PREFIX)
     app.include_router(jobs_router, prefix=API_V1_PREFIX)
     app.include_router(tiles_router, prefix=API_V1_PREFIX)
+    app.include_router(catalogs_router, prefix=API_V1_PREFIX)
+    app.include_router(ecology_router, prefix=API_V1_PREFIX)
 
     @app.exception_handler(ProblemError)
     async def problem_error_handler(request: Request, exc: ProblemError) -> JSONResponse:

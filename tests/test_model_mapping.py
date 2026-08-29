@@ -6,6 +6,12 @@ from sqlalchemy.orm import configure_mappers
 
 
 def test_all_mappers_configure_without_ambiguous_foreign_keys() -> None:
-    for module in ("app.assets.models", "app.jobs.models", "app.uploads.models"):
+    for module in (
+        "app.assets.models",
+        "app.jobs.models",
+        "app.uploads.models",
+        "app.catalogs.models",
+        "app.ecology.models",
+    ):
         import_module(module)
     configure_mappers()

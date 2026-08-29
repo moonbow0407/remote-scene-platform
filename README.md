@@ -27,14 +27,14 @@ MinIO 保存不可变对象，RabbitMQ 仅负责消息传递，TiTiler 由 Nginx
 | **Stage 1** 可运行骨架 | 已完成 | Python 3.12 / `uv` 依赖分组、API 与 Worker 分镜像、Compose、RFC 9457、分页、探针、结构化日志、Alembic `0001`（PostGIS） |
 | **Stage 2** 栅格纵向闭环 | 主体已落地 | 上传 → Outbox → Worker → COG → PostGIS → 瓦片令牌。关闭与否以 A2.1–A2.10 为准 |
 | **Stage 3** 矢量与附件 | 未开始 | 同一资产生命周期上增加矢量导入与普通附件，不另建平行体系 |
-| **Stage 4** 目录与生态映射 | 未开始 | 资源目录、卫星/传感器、生态参数及显式多对多映射 |
+| **Stage 4** 目录与生态映射 | 进行中 | 管理类 CRUD 已落地（资源目录树、卫星/传感器、生态参数与显式多对多映射）；资产检索过滤与监测接入待后续 |
 | **Stage 5** 监测计划与调度 | 未开始 | 计划、RRULE/间隔、Scheduler 锁、增量选择、不可变输入快照 |
 | **Stage 6** 生命周期与可靠性 | 未开始 | 软删除与 7 天恢复、无引用对象清理、超时/取消、运维指标 |
 | **Stage 7** 迁移收口 | 未开始 | 矩阵核对、全量验收、OpenAPI 与前端交接 |
 
-**当前工作：关闭 Stage 2 验收，随后进入 Stage 3。**
+**当前工作：关闭 Stage 2 验收并推进 Stage 3；Stage 4A 目录/生态管理类 CRUD 可并行联调。**
 
-## 已交付能力（截至 Stage 2）
+## 已交付能力（截至 Stage 2，含 Stage 4A 管理类）
 
 对外入口：`http://localhost:8080`，业务 API 前缀 `/api/v1`。
 
@@ -49,10 +49,14 @@ MinIO 保存不可变对象，RabbitMQ 仅负责消息传递，TiTiler 由 Nginx
 | 工件下载 | `GET /api/v1/assets/{id}/versions/{vid}/artifacts/{kind}/download-url` |
 | Job 轮询 | `GET /api/v1/jobs/{job_id}` |
 | 瓦片 URL | `GET /api/v1/assets/{id}/versions/{vid}/tile-url`（经 Nginx `/tiles/`，无令牌拒绝） |
+| 资源目录 | `GET/POST /api/v1/catalogs/resources`、`…/tree`、`…/{id}` |
+| 卫星 / 传感器 | `GET/POST /api/v1/catalogs/satellites`、`…/sensors`、`GET …/satellites/{id}/sensors` |
+| 生态参数 | `GET/POST /api/v1/ecology/parameters`、`…/tree`、`…/{id}` |
+| 生态↔资源映射 | `GET/POST /api/v1/ecology/mappings`、`POST …/mappings/batch` |
 
 Prometheus 指标 `GET /api/v1/metrics` 仅 Compose 内网抓取，Nginx 对外返回 404。
 
-首版仅接受栅格 TIFF 上传。矢量、附件、目录、监测计划尚未提供 API。
+首版仅接受栅格 TIFF 上传。矢量、附件、监测计划尚未提供 API。Stage 4 资产检索按目录/卫星/传感器/生态映射过滤尚未接入。
 
 ## 快速启动
 
@@ -105,13 +109,15 @@ src/app/
 ├── api/        # FastAPI 应用工厂、探针、指标、trace 中间件
 ├── assets/     # 逻辑资产、不可变版本、检索
 ├── uploads/    # MinIO Multipart 上传会话
+├── catalogs/   # 资源目录、卫星、传感器（Stage 4A）
+├── ecology/    # 生态参数与资源映射（Stage 4A）
 ├── jobs/       # Job 状态机、事件、Outbox
 ├── processing/ # 栅格入库流水线与 Celery 任务
 ├── tiles/      # 短期瓦片令牌
 ├── worker/     # Celery Geo Worker
 ├── dispatcher/ # Outbox Dispatcher
 └── scheduler/  # 独立 Scheduler
-alembic/        # 迁移（0001 PostGIS，0002 Stage 2 栅格模型）
+alembic/        # 迁移（0001 PostGIS，0002 Stage 2 栅格模型；Stage 4 表待合并后统一生成）
 docker/         # api/worker 镜像与 Nginx 配置
 prometheus/     # 抓取配置
 doc/            # 架构、阶段方案、迁移矩阵、验收基线
