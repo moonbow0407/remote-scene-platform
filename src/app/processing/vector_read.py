@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from datetime import date, datetime, time
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +37,10 @@ def read_vector_layer(path: Path, kind: DetectedKind, *, user_crs: str | None) -
         layer = _read_geopackage(path)
     else:
         raise DeterministicError("UNSUPPORTED_FORMAT", f"不支持的矢量格式：{kind}")
+    layer = replace(
+        layer,
+        features=[(geom, normalize_properties(props)) for geom, props in layer.features],
+    )
     if not layer.features:
         raise DeterministicError("NO_FEATURES", "矢量文件不包含可导入要素")
     if layer.source_crs is None:
@@ -44,6 +51,36 @@ def read_vector_layer(path: Path, kind: DetectedKind, *, user_crs: str | None) -
             )
         layer.source_crs = user_crs
     return layer
+
+
+def normalize_properties(props: dict[str, Any]) -> dict[str, Any]:
+    """把要素属性归一化为可写入 PostgreSQL JSONB 的 JSON 类型。"""
+    return {str(key): normalize_json_value(value) for key, value in props.items()}
+
+
+def normalize_json_value(value: Any) -> Any:
+    """单个属性值的 JSONB 归一化。
+
+    DBF/GPKG 常见 date/datetime/Decimal，均转换为 JSON 兼容表示；
+    bytes 等无法忠实表示的类型明确拒绝——写入 JSONB 前静默修正或丢字段
+    都会掩盖源数据问题。
+    """
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, Decimal):
+        number = float(value)
+        return number if math.isfinite(number) else str(value)
+    if isinstance(value, (datetime, date, time)):
+        return value.isoformat()
+    if isinstance(value, (list, tuple)):
+        return [normalize_json_value(item) for item in value]
+    if isinstance(value, dict):
+        return {str(key): normalize_json_value(item) for key, item in value.items()}
+    raise DeterministicError(
+        "UNSUPPORTED_PROPERTY_TYPE",
+        f"矢量属性包含无法写入 JSONB 的类型 {type(value).__name__}；"
+        "请转换源数据属性后重新上传",
+    )
 
 
 def _read_geojson(path: Path) -> VectorLayer:

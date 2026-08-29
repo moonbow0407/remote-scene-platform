@@ -73,9 +73,15 @@ def make_singleband() -> None:
 
 
 def make_no_crs() -> None:
-    """X3：3 波段 Byte，无 CRS、无地理参考（NEEDS_INPUT 夹具）。"""
+    """X3：3 波段 Byte，无 CRS、有 EPSG:4326 度单位 GeoTransform（NEEDS_INPUT 夹具）。
+
+    保留有效 GeoTransform 使"补充 CRS → 断点恢复"链路可测；无 GeoTransform 的数据
+    无法凭 CRS 定位（像素坐标不等于真实坐标），按 MISSING_GEOLOCATION 阻塞，
+    不作为缺 CRS 夹具使用。
+    """
     path = FIXTURES / "no_crs.tif"
     height, width = 128, 128
+    transform = from_origin(114.0, 31.0, 0.004, 0.004)
     data = np.random.randint(0, 255, size=(3, height, width)).astype("uint8")
     with rasterio.open(
         path,
@@ -85,7 +91,8 @@ def make_no_crs() -> None:
         width=width,
         count=3,
         dtype="uint8",
-        # 故意不写 crs 与 transform
+        transform=transform,
+        # 故意不写 crs
     ) as dst:
         dst.write(data)
     print(f"written {path}")

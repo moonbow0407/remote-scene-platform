@@ -135,6 +135,9 @@ class CatalogService:
                 raise validation_error("不能将资源目录的父节点设为自己")
             if new_parent_id is not None:
                 self.get_resource_required(new_parent_id)
+                # 并发改父（A→B 与 B→A）各自做环检测时都看不到对方未提交的修改，
+                # 可能双双通过后落库成环；用事务级 advisory lock 串行化父节点变更
+                self._lock_catalog_tree_for_parent_change()
                 if self._resource_would_cycle(resource_id, new_parent_id):
                     raise conflict(
                         code="RESOURCE_CATALOG_PARENT_CYCLE",
@@ -204,16 +207,28 @@ class CatalogService:
         return build(None)
 
     def subtree_ids(self, resource_id: UUID) -> list[UUID]:
-        """包含自身的子树主键；目录规模小，在内存中展开。"""
+        """包含自身的子树主键；目录规模小，在内存中展开。
+
+        visited 防御：数据因并发改父出现环时立即报数据不变量错误并终止遍历，
+        绝不让检索请求无限循环拖垮进程。
+        """
         self.get_resource_required(resource_id)
         rows = self._session.execute(sa.select(ResourceCatalog.id, ResourceCatalog.parent_id)).all()
         children: dict[UUID | None, list[UUID]] = {}
         for row_id, parent_id in rows:
             children.setdefault(parent_id, []).append(row_id)
         ordered: list[UUID] = []
+        visited: set[UUID] = set()
         stack = [resource_id]
         while stack:
             current = stack.pop()
+            if current in visited:
+                raise RuntimeError(
+                    "资源目录树出现环，数据不变量被破坏："
+                    f"子树根 {resource_id} 的遍历重复经过节点 {current}；"
+                    "请先修复 resource_catalog.parent_id 再执行检索"
+                )
+            visited.add(current)
             ordered.append(current)
             stack.extend(reversed(children.get(current, [])))
         return ordered
@@ -227,6 +242,17 @@ class CatalogService:
                 code="RESOURCE_CATALOG_CODE_CONFLICT",
                 detail=f"资源目录编码 {code} 已存在",
             )
+
+    def _lock_catalog_tree_for_parent_change(self) -> None:
+        """以事务级 advisory lock 串行化父节点变更，防止并发改父互相看不到未提交修改而放过成环。
+
+        仅 PostgreSQL 支持该函数；单元测试的 SQLite（无并发改父场景）直接跳过。
+        """
+        if self._session.get_bind().dialect.name != "postgresql":
+            return
+        self._session.execute(
+            sa.text("SELECT pg_advisory_xact_lock(hashtext('catalog_parent_change'))")
+        )
 
     def _resource_would_cycle(self, node_id: UUID, new_parent_id: UUID) -> bool:
         """从候选父节点向上走，若遇到 node_id 则成环。"""
@@ -424,8 +450,17 @@ class CatalogService:
     def update_sensor(self, sensor_id: UUID, body: SensorUpdate) -> Sensor:
         row = self.get_sensor_required(sensor_id)
         data = body.model_dump(exclude_unset=True)
-        if "satellite_id" in data:
+        if "satellite_id" in data and data["satellite_id"] != row.satellite_id:
+            # 资产同时落 satellite_id 与 sensor_id，且要求 sensor 属于 satellite；
+            # 变更已被资产引用的传感器所属卫星会让三个外键各自合法但业务上自相矛盾
+            # （按卫星查得到、按传感器也查得到，而传感器已属于另一颗卫星），
+            # 因此引用期间禁止变更，先解除资产引用再调整主数据。
             self.get_satellite_required(data["satellite_id"])
+            if self._sensor_referenced_by_assets(sensor_id):
+                raise conflict(
+                    code="SENSOR_IN_USE",
+                    detail=f"传感器 {sensor_id} 已被逻辑资产引用，禁止变更所属卫星",
+                )
             row.satellite_id = data["satellite_id"]
         if "code" in data and data["code"] != row.code:
             self._ensure_sensor_code_unique(data["code"], exclude_id=sensor_id)
@@ -461,3 +496,14 @@ class CatalogService:
             stmt = stmt.where(Sensor.id != exclude_id)
         if self._session.scalar(stmt) is not None:
             raise conflict(code="SENSOR_CODE_CONFLICT", detail=f"传感器编码 {code} 已存在")
+
+    def _sensor_referenced_by_assets(self, sensor_id: UUID) -> bool:
+        """探测逻辑资产对传感器的引用（只读）。延迟导入避免 catalogs↔assets 循环依赖。"""
+        from app.assets.models import DataAsset
+
+        return (
+            self._session.scalar(
+                sa.select(DataAsset.id).where(DataAsset.sensor_id == sensor_id).limit(1)
+            )
+            is not None
+        )

@@ -10,7 +10,7 @@ from app.assets.service import AssetService
 from app.db import session_scope
 from app.jobs.enums import JobStatus
 from app.jobs.service import JobService
-from app.processing.blob import hash_dedup_original
+from app.processing.blob import hash_dedup_original, resolve_input_object
 from app.processing.common import IngestionContext, cleanup_tmp_dir, preflight_tmp
 from app.processing.detect import DetectedKind, sniff_head
 from app.processing.errors import DeterministicError
@@ -40,17 +40,24 @@ class AttachmentIngestion:
             cleanup_tmp_dir(ctx.tmp_dir)
 
     def _step_validate(self, ctx: IngestionContext) -> tuple[DetectedKind, str]:
-        stat = self._minio.head_object(key=ctx.source_object_key)
+        # 输入对象按 resolve_input_object 统一解析：哈希去重删除上传源后，重试改用 canonical blob
+        key, expected_size = resolve_input_object(engine=self._engine, ctx=ctx)
+        stat = self._minio.head_object(key=key)
+        if stat is None and key != ctx.source_object_key:
+            key = ctx.source_object_key
+            expected_size = ctx.source_size_bytes
+            stat = self._minio.head_object(key=key)
         if stat is None:
             raise DeterministicError(
-                "SOURCE_OBJECT_MISSING", f"源对象不存在：{ctx.source_object_key}"
+                "SOURCE_OBJECT_MISSING",
+                f"输入对象不存在：canonical/blob 与上传源 {ctx.source_object_key} 均不可访问",
             )
-        if stat["size"] != ctx.source_size_bytes:
+        if stat["size"] != expected_size:
             raise DeterministicError(
                 "SOURCE_SIZE_MISMATCH",
-                f"源对象大小 {stat['size']} 与登记大小 {ctx.source_size_bytes} 不一致",
+                f"输入对象大小 {stat['size']} 与登记大小 {expected_size} 不一致",
             )
-        magic = self._minio.read_head_bytes(key=ctx.source_object_key, length=16)
+        magic = self._minio.read_head_bytes(key=key, length=16)
         kind = sniff_head(magic)
         mime = {
             DetectedKind.PDF: "application/pdf",

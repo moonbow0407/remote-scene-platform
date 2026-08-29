@@ -8,6 +8,7 @@
 """
 
 import logging
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -16,14 +17,16 @@ from geoalchemy2 import WKTElement
 from pyproj import Transformer
 from rasterio.crs import CRS
 from rasterio.enums import Resampling
+from rasterio.errors import NotGeoreferencedWarning
 from rasterio.shutil import copy as rio_copy
+from rasterio.transform import Affine
 
 from app.assets.enums import ArtifactKind, AssetVersionStatus
 from app.assets.service import AssetService
 from app.db import session_scope
 from app.jobs.enums import JobStatus
 from app.jobs.service import JobService
-from app.processing.blob import ensure_source_local, hash_dedup_original
+from app.processing.blob import ensure_source_local, hash_dedup_original, resolve_input_object
 from app.processing.common import (
     IngestionContext,
     cleanup_tmp_dir,
@@ -101,18 +104,29 @@ class RasterIngestion:
     # ---- 步骤实现 ----
 
     def _step_validate(self, ctx: IngestionContext) -> None:
-        """校验对象存在、大小一致且为 TIFF；非 TIFF 属确定性错误。"""
-        stat = self._minio.head_object(key=ctx.source_object_key)
+        """校验输入对象存在、大小一致且为 TIFF；非 TIFF 属确定性错误。
+
+        输入对象按 resolve_input_object 统一解析：重试/NEEDS_INPUT 恢复时上传源
+        对象已被哈希去重删除，改用 canonical blob。canonical 对象缺失但上传源仍在
+        （此前删除失败）时回退校验源对象，让 hash_dedup 据此修复 canonical 对象。
+        """
+        key, expected_size = resolve_input_object(engine=self._engine, ctx=ctx)
+        stat = self._minio.head_object(key=key)
+        if stat is None and key != ctx.source_object_key:
+            key = ctx.source_object_key
+            expected_size = ctx.source_size_bytes
+            stat = self._minio.head_object(key=key)
         if stat is None:
             raise DeterministicError(
-                "SOURCE_OBJECT_MISSING", f"源对象不存在：{ctx.source_object_key}"
+                "SOURCE_OBJECT_MISSING",
+                f"输入对象不存在：canonical/blob 与上传源 {ctx.source_object_key} 均不可访问",
             )
-        if stat["size"] != ctx.source_size_bytes:
+        if stat["size"] != expected_size:
             raise DeterministicError(
                 "SOURCE_SIZE_MISMATCH",
-                f"源对象大小 {stat['size']} 与登记大小 {ctx.source_size_bytes} 不一致",
+                f"输入对象大小 {stat['size']} 与登记大小 {expected_size} 不一致",
             )
-        magic = self._minio.read_head_bytes(key=ctx.source_object_key, length=4)
+        magic = self._minio.read_head_bytes(key=key, length=4)
         if not is_supported_tiff_magic(magic):
             raise DeterministicError(
                 "UNSUPPORTED_FORMAT",
@@ -127,7 +141,13 @@ class RasterIngestion:
         )
 
     def _step_inspect(self, ctx: IngestionContext) -> None:
-        """读取栅格元数据并检查 CRS；缺失且未补充时抛 NeedsInputError（不落变更）。"""
+        """读取栅格元数据并检查地理参考；缺失且未补充时抛 NeedsInputError（不落变更）。
+
+        地理定位与 CRS 是两个独立前提：CRS 只说明坐标含义，GeoTransform 才决定
+        影像在哪里。没有可用 GeoTransform 时（rasterio 返回单位阵），即使补充了
+        CRS 也必须保持 NEEDS_INPUT，否则像素坐标会被当成真实坐标写入 footprint，
+        产生空间位置错误但仍 READY 的数据。
+        """
         ensure_source_local(minio=self._minio, engine=self._engine, ctx=ctx)
         with session_scope(self._engine) as session:
             assets = AssetService(session)
@@ -135,51 +155,61 @@ class RasterIngestion:
             assert version is not None
             ext = assets.get_raster_ext(ctx.version_id)
             user_crs = ext.user_crs if ext is not None else None
-            with rasterio.open(ctx.source_path) as dataset:
-                src_crs = dataset.crs
-                if src_crs is None and user_crs is None:
-                    raise NeedsInputError(
-                        reason="MISSING_CRS",
-                        detail="源文件缺少 CRS 且未提供补充信息；"
-                        "请提交 EPSG 代码后从断点继续，无需重新上传",
-                    )
-                if src_crs is not None:
-                    effective_crs = src_crs
-                else:
-                    try:
-                        effective_crs = CRS.from_user_input(user_crs)
-                    except Exception as exc:
+            with warnings.catch_warnings():
+                # 无地理参考时 rasterio 返回单位阵并告警；此处以单位阵作为判定依据，告警无意义
+                warnings.simplefilter("ignore", NotGeoreferencedWarning)
+                with rasterio.open(ctx.source_path) as dataset:
+                    src_crs = dataset.crs
+                    transform = dataset.transform
+                    if transform == Affine.identity():
                         raise NeedsInputError(
-                            reason="INVALID_CRS",
-                            detail=f"补充的 CRS {user_crs!r} 无法解析，请提供有效 EPSG 代码",
-                        ) from exc
-                profile = infer_render_profile(dataset.count)
-                bands = []
-                for idx in range(1, dataset.count + 1):
-                    stats = dataset.statistics(idx, approx=True)
-                    bands.append(
-                        {
-                            "index": idx,
-                            "name": dataset.descriptions[idx - 1],
-                            "dtype": dataset.dtypes[idx - 1],
-                            "min": stats.min,
-                            "max": stats.max,
-                            "mean": stats.mean,
-                        }
+                            reason="MISSING_GEOLOCATION",
+                            detail="影像没有可用的 GeoTransform（也没有可用于定位的 GCP）；"
+                            "仅有 CRS 无法确定空间位置，不得把像素坐标当作真实坐标。"
+                            "请提供带地理参考的影像或定位信息后继续",
+                        )
+                    if src_crs is None and user_crs is None:
+                        raise NeedsInputError(
+                            reason="MISSING_CRS",
+                            detail="源文件缺少 CRS 且未提供补充信息；"
+                            "请提交 EPSG 代码后从断点继续，无需重新上传",
+                        )
+                    if src_crs is not None:
+                        effective_crs = src_crs
+                    else:
+                        try:
+                            effective_crs = CRS.from_user_input(user_crs)
+                        except Exception as exc:
+                            raise NeedsInputError(
+                                reason="INVALID_CRS",
+                                detail=f"补充的 CRS {user_crs!r} 无法解析，请提供有效 EPSG 代码",
+                            ) from exc
+                    profile = infer_render_profile(dataset.count)
+                    bands = []
+                    for idx in range(1, dataset.count + 1):
+                        stats = dataset.statistics(idx, approx=True)
+                        bands.append(
+                            {
+                                "index": idx,
+                                "name": dataset.descriptions[idx - 1],
+                                "dtype": dataset.dtypes[idx - 1],
+                                "min": stats.min,
+                                "max": stats.max,
+                                "mean": stats.mean,
+                            }
+                        )
+                    assets.upsert_raster_ext(
+                        ctx.version_id,
+                        crs=str(effective_crs),
+                        width=dataset.width,
+                        height=dataset.height,
+                        band_count=dataset.count,
+                        bands=bands,
+                        resolution_x=abs(transform.a),
+                        resolution_y=abs(transform.e),
+                        nodata=dataset.nodata,
+                        render_profile=dict(profile),
                     )
-                transform = dataset.transform
-                assets.upsert_raster_ext(
-                    ctx.version_id,
-                    crs=str(effective_crs),
-                    width=dataset.width,
-                    height=dataset.height,
-                    band_count=dataset.count,
-                    bands=bands,
-                    resolution_x=abs(transform.a),
-                    resolution_y=abs(transform.e),
-                    nodata=dataset.nodata,
-                    render_profile=dict(profile),
-                )
             if version.status is AssetVersionStatus.VALIDATING:
                 assets.set_version_status(version, AssetVersionStatus.PROCESSING)
         self._record_step(ctx, "inspect")

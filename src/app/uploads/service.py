@@ -102,7 +102,9 @@ class UploadService:
         safe_name = _sanitize_file_name(file_name)
         object_key = f"uploads/{session_id}/{safe_name}"
 
-        upload_id = self._minio.create_multipart_upload(key=object_key, content_type=content_type)
+        # 先完成全部依赖数据库/MinIO 之外状态的校验，再创建 Multipart：
+        # 否则无效请求（如资源目录不存在）会留下无人 abort 的孤儿分片上传。
+        self._assets.validate_asset_properties(asset_type, properties)
         if asset_id is not None:
             asset = self._assets.get_asset_required(asset_id)
             if asset.asset_type is not asset_type:
@@ -137,32 +139,46 @@ class UploadService:
                 satellite_id=satellite_id,
                 sensor_id=sensor_id,
             )
-        session = UploadSession(
-            id=session_id,
-            asset_id=asset.id,
-            status=UploadSessionStatus.PENDING,
-            minio_upload_id=upload_id,
-            object_key=object_key,
-            file_name=safe_name,
-            size_bytes=size_bytes,
-            part_count=part_count,
-            content_type=content_type,
-        )
-        self._session.add(session)
-        self._session.flush()
 
-        part_urls = [
-            {
-                "part_number": number,
-                "url": self._minio.presign_part_url(
-                    key=object_key,
-                    upload_id=upload_id,
-                    part_number=number,
-                    expires_in=self._settings.presign_expiry_seconds,
-                ),
-            }
-            for number in range(1, part_count + 1)
-        ]
+        upload_id = self._minio.create_multipart_upload(key=object_key, content_type=content_type)
+        try:
+            session = UploadSession(
+                id=session_id,
+                asset_id=asset.id,
+                status=UploadSessionStatus.PENDING,
+                minio_upload_id=upload_id,
+                object_key=object_key,
+                file_name=safe_name,
+                size_bytes=size_bytes,
+                part_count=part_count,
+                content_type=content_type,
+                properties=dict(properties),
+            )
+            self._session.add(session)
+            self._session.flush()
+
+            part_urls = [
+                {
+                    "part_number": number,
+                    "url": self._minio.presign_part_url(
+                        key=object_key,
+                        upload_id=upload_id,
+                        part_number=number,
+                        expires_in=self._settings.presign_expiry_seconds,
+                    ),
+                }
+                for number in range(1, part_count + 1)
+            ]
+        except Exception:
+            # 校验已通过但落库/预签名失败：尽力回收 Multipart，避免遗留孤儿上传
+            try:
+                self._minio.abort_multipart_upload(key=object_key, upload_id=upload_id)
+            except Exception:
+                logger.warning(
+                    "孤儿 Multipart 上传清理失败，等待人工或生命周期策略清理",
+                    extra={"object_key": object_key, "upload_id": upload_id},
+                )
+            raise
         return session, part_urls
 
     def get_session_required(self, session_id: UUID) -> UploadSession:
@@ -241,9 +257,11 @@ class UploadService:
                 ),
             )
 
-        # 同一事务：版本 + Job + Outbox + 会话状态
+        # 同一事务：版本 + Job + Outbox + 会话状态。
+        # 版本业务元数据取本批上传会话声明（session.properties），
+        # 追加版本时不得从 DataAsset.properties 抄一份而丢弃本批元数据。
         asset = self._assets.get_asset_required(session.asset_id)
-        properties = dict(asset.properties)
+        properties = dict(session.properties)
         version = self._assets.create_version(
             asset_id=session.asset_id,
             original_file_name=session.file_name,

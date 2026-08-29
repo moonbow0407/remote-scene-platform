@@ -7,17 +7,21 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from sqlite3 import Connection as SqliteConnection
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 import sqlalchemy as sa
 from fastapi.testclient import TestClient
 from sqlalchemy import event
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 from sqlalchemy.schema import Table
 
 from app.api.app import create_app
+from app.assets.enums import AssetSource, AssetType
+from app.assets.models import AssetVersion, DataAsset, ObjectBlob
 from app.catalogs.enums import CatalogStatus
 from app.catalogs.models import ResourceCatalog, Satellite, Sensor
 from app.catalogs.schemas import (
@@ -25,6 +29,7 @@ from app.catalogs.schemas import (
     ResourceCatalogUpdate,
     SatelliteCreate,
     SensorCreate,
+    SensorUpdate,
 )
 from app.catalogs.service import CatalogService
 from app.db import Base, session_scope
@@ -37,6 +42,11 @@ from app.ecology.schemas import (
 from app.ecology.service import EcologyService
 from app.errors import ProblemError
 from app.pagination import PageParams
+
+
+@compiles(JSONB, "sqlite")
+def _jsonb_sqlite(_type: JSONB, compiler: object, **_kw: object) -> str:
+    return "JSON"
 
 
 def _make_engine() -> sa.Engine:
@@ -59,6 +69,9 @@ def _make_engine() -> sa.Engine:
         Base.metadata.tables[ResourceCatalog.__tablename__],
         Base.metadata.tables[Satellite.__tablename__],
         Base.metadata.tables[Sensor.__tablename__],
+        Base.metadata.tables[ObjectBlob.__tablename__],
+        Base.metadata.tables[AssetVersion.__tablename__],
+        Base.metadata.tables[DataAsset.__tablename__],
         Base.metadata.tables[EcologicalParameter.__tablename__],
         Base.metadata.tables[EcologicalParameterResourceMapping.__tablename__],
     ]
@@ -404,3 +417,66 @@ def test_disabled_status_filter(factory: sessionmaker[Session]) -> None:
         page = svc.list_resources(PageParams(), status=CatalogStatus.DISABLED)
         assert page.total == 1
         assert page.items[0].code == "off"
+
+
+# ---------- Sensor 所属卫星变更保护 / 子树环检测防御 ----------
+
+
+def _add_asset_for_sensor(session: Session, sensor_id: UUID, satellite_id: UUID) -> None:
+    session.add(
+        DataAsset(
+            id=uuid4(),
+            name="引用资产",
+            asset_type=AssetType.RASTER,
+            source=AssetSource.UPLOAD,
+            satellite_id=satellite_id,
+            sensor_id=sensor_id,
+        )
+    )
+    session.flush()
+
+
+def test_sensor_satellite_change_blocked_when_referenced_by_asset(
+    factory: sessionmaker[Session],
+) -> None:
+    """传感器已被资产引用时，变更所属卫星会造成资产目录关系自相矛盾，必须 409。"""
+    with session_scope(factory) as session:
+        svc = CatalogService(session)
+        sat_a = svc.create_satellite(SatelliteCreate(code="SAT-A", name="A"))
+        sat_b = svc.create_satellite(SatelliteCreate(code="SAT-B", name="B"))
+        sensor = svc.create_sensor(SensorCreate(code="SEN", name="s", satellite_id=sat_a.id))
+        _add_asset_for_sensor(session, sensor.id, sat_a.id)
+
+        with pytest.raises(ProblemError) as exc_info:
+            svc.update_sensor(sensor.id, SensorUpdate(satellite_id=sat_b.id))
+        assert exc_info.value.status == 409
+        assert exc_info.value.code == "SENSOR_IN_USE"
+        session.refresh(sensor)
+        assert sensor.satellite_id == sat_a.id
+
+
+def test_sensor_satellite_change_allowed_when_not_referenced(
+    factory: sessionmaker[Session],
+) -> None:
+    with session_scope(factory) as session:
+        svc = CatalogService(session)
+        sat_a = svc.create_satellite(SatelliteCreate(code="SAT-C", name="C"))
+        sat_b = svc.create_satellite(SatelliteCreate(code="SAT-D", name="D"))
+        sensor = svc.create_sensor(SensorCreate(code="SEN2", name="s2", satellite_id=sat_a.id))
+        updated = svc.update_sensor(sensor.id, SensorUpdate(satellite_id=sat_b.id))
+        assert updated.satellite_id == sat_b.id
+
+
+def test_subtree_ids_detects_corrupt_cycle(factory: sessionmaker[Session]) -> None:
+    """目录数据被并发改父破坏成环时，subtree_ids 必须报错终止，不得无限循环。"""
+    with session_scope(factory) as session:
+        svc = CatalogService(session)
+        a = svc.create_resource(ResourceCatalogCreate(code="CA", name="A"))
+        b = svc.create_resource(ResourceCatalogCreate(code="CB", name="B", parent_id=a.id))
+        # 绕过服务层环检测，直接构造 A→B、B→A 的矛盾数据（模拟并发改父落库后果）
+        session.execute(
+            sa.update(ResourceCatalog).where(ResourceCatalog.id == a.id).values(parent_id=b.id)
+        )
+        session.flush()
+        with pytest.raises(RuntimeError, match="环"):
+            svc.subtree_ids(a.id)

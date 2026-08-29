@@ -44,6 +44,10 @@ class UploadSession(Base, TimestampMixin):
     size_bytes: Mapped[int] = mapped_column(sa.BigInteger, nullable=False)
     part_count: Mapped[int] = mapped_column(sa.Integer, nullable=False)
     content_type: Mapped[str | None] = mapped_column(sa.String(128), nullable=True)
+    # 本批上传自行声明的业务元数据（可含 ISO8601 acquired_at）；
+    # 追加版本时版本元数据取自这里，而不是从 DataAsset.properties 抄一份。
+    # 数据库层默认值仅由 Alembic 迁移提供（'{}'::jsonb 为 PostgreSQL 语法）
+    properties: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
     completed_version_id: Mapped[UUID | None] = mapped_column(sa.Uuid, nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
     last_error: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)

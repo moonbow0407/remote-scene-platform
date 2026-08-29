@@ -98,6 +98,21 @@ def hash_dedup_original(
     _record_step(engine, ctx, "hash_dedup")
 
 
+def resolve_input_object(*, engine: Any, ctx: IngestionContext) -> tuple[str, int]:
+    """确定本次任务应使用的输入对象及其登记大小。
+
+    哈希去重成功后会删除 uploads/ 下的上传源对象，因此重试或 NEEDS_INPUT 恢复时
+    必须改用 canonical blob，不能再固定依赖最初的 source_object_key；
+    版本尚未绑定 blob（首次执行）时仍使用上传源对象。
+    """
+    with session_scope(engine) as session:
+        version = AssetService(session).get_version_by_id(ctx.version_id)
+        if version is not None and version.blob is not None:
+            assert version.blob.size_bytes is not None
+            return version.blob.object_key, int(version.blob.size_bytes)
+    return ctx.source_object_key, ctx.source_size_bytes
+
+
 def ensure_source_local(*, minio: MinioAdapter, engine: Any, ctx: IngestionContext) -> Any:
     from pathlib import Path
 
