@@ -5,8 +5,9 @@
 """
 
 from functools import lru_cache
+from typing import Self
 
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -55,6 +56,11 @@ class Settings(BaseSettings):
     # 瓦片令牌签名密钥：生产环境必须经环境注入；未配置时瓦片签发接口拒绝服务
     tile_token_secret: str = ""
 
+    # JWT：Access/Refresh 签名密钥与 TTL。密钥禁止写入源码；生产环境不允许为空。
+    jwt_secret: str = ""
+    access_token_ttl_seconds: int = 3600
+    refresh_token_ttl_seconds: int = 604800
+
     # Geo Worker 临时目录（每任务独立子目录，开始前检查可用空间）
     worker_tmp_dir: str = "/data/tmp"
     # 临时空间预检：低于源文件预计占用的该倍数时任务早期失败
@@ -70,6 +76,23 @@ class Settings(BaseSettings):
                 "应为 postgresql+psycopg://用户名:口令@主机:端口/库名"
             )
         return value
+
+    @field_validator("access_token_ttl_seconds", "refresh_token_ttl_seconds")
+    @classmethod
+    def _validate_token_ttl(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError(
+                "JWT TTL 必须为正整数秒"
+                "（APP_ACCESS_TOKEN_TTL_SECONDS / APP_REFRESH_TOKEN_TTL_SECONDS）"
+            )
+        return value
+
+    @model_validator(mode="after")
+    def _validate_jwt_secret_in_production(self) -> Self:
+        # 生产环境空密钥会导致所有令牌可被伪造或无法签发，必须在启动期失败
+        if self.env.lower() in {"prod", "production"} and not self.jwt_secret.strip():
+            raise ValueError("生产环境必须配置 APP_JWT_SECRET，禁止使用空密钥")
+        return self
 
 
 @lru_cache

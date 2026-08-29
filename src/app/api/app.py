@@ -17,6 +17,7 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.assets.router import router as assets_router
+from app.auth.router import auth_router, users_router
 from app.catalogs.router import router as catalogs_router
 from app.db import create_engine, make_session_factory
 from app.ecology.router import router as ecology_router
@@ -89,6 +90,8 @@ def create_app() -> FastAPI:
     app = FastAPI(title="remote-scene-platform", version="0.1.0", lifespan=_lifespan)
     app.add_middleware(TraceAccessMiddleware)
     app.include_router(ops_router, prefix=API_V1_PREFIX)
+    app.include_router(auth_router, prefix=API_V1_PREFIX)
+    app.include_router(users_router, prefix=API_V1_PREFIX)
     app.include_router(assets_router, prefix=API_V1_PREFIX)
     app.include_router(uploads_router, prefix=API_V1_PREFIX)
     app.include_router(jobs_router, prefix=API_V1_PREFIX)

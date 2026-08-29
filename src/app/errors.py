@@ -44,3 +44,11 @@ def service_unavailable(component: str, detail: str) -> ProblemError:
         title=f"依赖组件 {component} 不可用",
         detail=detail,
     )
+
+
+def unauthorized(code: str, detail: str) -> ProblemError:
+    return ProblemError(status=401, code=code, title="未认证", detail=detail)
+
+
+def forbidden(code: str, detail: str) -> ProblemError:
+    return ProblemError(status=403, code=code, title="无权限", detail=detail)

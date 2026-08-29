@@ -1,12 +1,20 @@
 """ActorContext：操作者上下文接缝。
 
-首版不实现鉴权，Service 统一使用匿名系统操作者；二期接入 JWT 与 ADMIN/USER 时，
-只需在此处替换解析逻辑并把真实用户标识写入 owner_id/created_by，
-不需要改造 API 与任务主链路。
+未接入鉴权的业务模块继续通过 `get_actor()` 获取匿名系统操作者。
+鉴权模块把已认证用户映射为本结构（actor_id / display_name / role），
+业务 Service 只依赖 ActorContext，不解析 JWT 或 User ORM。
 """
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from enum import StrEnum
+
+
+class ActorRole(StrEnum):
+    """首版角色：仅管理员与普通用户，不引入权限字符串或策略引擎。"""
+
+    ADMIN = "ADMIN"
+    USER = "USER"
 
 
 @dataclass(frozen=True)
@@ -15,13 +23,14 @@ class ActorContext:
 
     actor_id: str | None
     display_name: str
+    role: ActorRole | None = None
 
 
 _ANONYMOUS = ActorContext(actor_id=None, display_name="anonymous-system")
 
 
 def get_actor() -> ActorContext:
-    """返回当前操作者；首版固定为匿名系统操作者。"""
+    """返回匿名系统操作者。真实用户身份由 auth 依赖注入，不在此解析请求。"""
     return _ANONYMOUS
 
 

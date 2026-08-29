@@ -52,6 +52,7 @@ MinIO 保存不可变对象，RabbitMQ 仅负责消息传递，TiTiler 由 Nginx
 | 追加版本 | `POST /api/v1/uploads/sessions` 带 `asset_id` |
 | 要素检索 | `POST /api/v1/assets/{id}/versions/{vid}/features/search` |
 | JSON Schema | `GET/PUT /api/v1/assets/property-schemas` |
+| 登录与用户 | `POST /api/v1/auth/login`、`/refresh`、`GET /api/v1/auth/me`；管理员 `/api/v1/users` |
 | 资源目录 | `GET/POST /api/v1/catalogs/resources`、`…/tree`、`…/{id}` |
 | 卫星 / 传感器 | `GET/POST /api/v1/catalogs/satellites`、`…/sensors`、`GET …/satellites/{id}/sensors` |
 | 生态参数 | `GET/POST /api/v1/ecology/parameters`、`…/tree`、`…/{id}` |

@@ -12,6 +12,8 @@ dependencies = [
     "alembic>=1.13",
     "uuid-utils>=0.9",
     "prometheus-client>=0.20",
+    "argon2-cffi>=25.1.0",
+    "pyjwt>=2.13.0",
 ]
 
 [dependency-groups]
