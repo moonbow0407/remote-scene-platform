@@ -149,6 +149,15 @@ services:
       db:
         condition: service_healthy
 
+  # 独立 Job 恢复器：回收租约过期的 RUNNING 任务并经 Outbox 重投（Worker 崩溃自愈）
+  recovery:
+    image: remote-scene/api:latest
+    env_file: .env
+    command: [".venv/bin/python", "-m", "app.recovery.main"]
+    depends_on:
+      db:
+        condition: service_healthy
+
   nginx:
     image: nginx:1.27-alpine
     ports:

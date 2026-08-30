@@ -52,6 +52,23 @@ class Job(Base, TimestampMixin):
     queued_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
+    # 执行租约：Worker 认领时取得 token 并持续心跳续约；租约过期即执行者失联，
+    # 由独立恢复器回收重投。不能依赖"下一条 Broker 重投消息恰好到达"——Worker
+    # 崩溃后消息已被 ACK，租约过期是唯一可靠的执行权回收信号。
+    lease_token: Mapped[Any] = mapped_column(
+        sa.Uuid, nullable=True, comment="执行租约令牌；心跳续约与恢复回收均按 token 校验归属"
+    )
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True, comment="租约到期时间；超过即视为执行者失联"
+    )
+    heartbeat_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True, comment="执行者最近一次续约时间"
+    )
+
+    __table_args__ = (
+        # 恢复器扫描：RUNNING 且租约过期
+        sa.Index("ix_job_status_lease_expires", "status", "lease_expires_at"),
+    )
 
 
 class JobEvent(Base):

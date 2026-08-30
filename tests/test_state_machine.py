@@ -48,6 +48,21 @@ def test_version_processing_path() -> None:
     )
 
 
+def test_version_validating_can_enter_needs_input() -> None:
+    """验证期缺 CRS/地理定位必须能暂停等待补充，否则 A2.5 断点恢复链路断链。
+
+    回归背景：Worker 捕获 NeedsInputError 后要把 VALIDATING 版本改为 NEEDS_INPUT，
+    旧转换表未包含该边导致整个 NEEDS_INPUT 落库事务回滚、任务卡 RUNNING。
+    """
+    assert is_version_transition_allowed(
+        AssetVersionStatus.VALIDATING, AssetVersionStatus.NEEDS_INPUT
+    )
+    # 补充信息后从 NEEDS_INPUT 恢复处理的既有路径不受影响
+    assert is_version_transition_allowed(
+        AssetVersionStatus.NEEDS_INPUT, AssetVersionStatus.PROCESSING
+    )
+
+
 def test_version_invalid_jump_rejected() -> None:
     assert not is_version_transition_allowed(
         AssetVersionStatus.VALIDATING, AssetVersionStatus.READY

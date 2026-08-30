@@ -32,6 +32,11 @@ class IngestionContext:
         return self.tmp_dir / "cog.tif"
 
     @property
+    def staged_vrt_path(self) -> Path:
+        # 指派用户 CRS 的 VRT 中间层：仅元数据引用源文件，不复制像素
+        return self.tmp_dir / "staged_crs.vrt"
+
+    @property
     def thumbnail_path(self) -> Path:
         return self.tmp_dir / "thumbnail.png"
 

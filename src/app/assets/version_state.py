@@ -11,7 +11,13 @@ ALLOWED_VERSION_TRANSITIONS: dict[AssetVersionStatus, frozenset[AssetVersionStat
         {AssetVersionStatus.VALIDATING, AssetVersionStatus.DELETED}
     ),
     AssetVersionStatus.VALIDATING: frozenset(
-        {AssetVersionStatus.PROCESSING, AssetVersionStatus.FAILED, AssetVersionStatus.DELETED}
+        {
+            AssetVersionStatus.PROCESSING,
+            # 验证期缺 CRS/地理定位即暂停等待补充（A2.5 断点恢复），不算失败
+            AssetVersionStatus.NEEDS_INPUT,
+            AssetVersionStatus.FAILED,
+            AssetVersionStatus.DELETED,
+        }
     ),
     AssetVersionStatus.PROCESSING: frozenset(
         {AssetVersionStatus.READY, AssetVersionStatus.FAILED, AssetVersionStatus.NEEDS_INPUT}

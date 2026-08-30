@@ -215,7 +215,12 @@ class RasterIngestion:
         self._record_step(ctx, "inspect")
 
     def _step_create_cog(self, ctx: IngestionContext) -> None:
-        """生成保留源 CRS 的 COG；用户补充 CRS 时在副本上指派（不做重投影）。"""
+        """生成保留源 CRS 的 COG；用户补充 CRS 时经中间层指派（不做重投影）。
+
+        已生成的 COG 不可再以更新模式修改：COG 驱动只支持 CreateCopy，就地更新
+        会破坏 COG 优化布局甚至失败。因此源无 CRS 且用户补充了 CRS 时，先把 CRS
+        指派到轻量 VRT 中间层（仅元数据、不复制像素），再一次性生成最终 COG。
+        """
         with session_scope(self._engine) as session:
             assets = AssetService(session)
             existing = assets.find_artifact(ctx.version_id, ArtifactKind.COG)
@@ -231,15 +236,18 @@ class RasterIngestion:
 
         ensure_source_local(minio=self._minio, engine=self._engine, ctx=ctx)
         cog_tmp = ctx.cog_path
-        rio_copy(
-            str(ctx.source_path), str(cog_tmp), driver="COG", compress="DEFLATE", blocksize=512
-        )
         with rasterio.open(ctx.source_path) as src:
             source_has_crs = src.crs is not None
         if user_crs and not source_has_crs:
-            # 源文件无地理参考：把用户补充的 CRS 指派到 COG（不做重投影）
-            with rasterio.open(cog_tmp, "r+") as dataset:
+            staged = ctx.staged_vrt_path
+            rio_copy(str(ctx.source_path), str(staged), driver="VRT")
+            with rasterio.open(staged, "r+") as dataset:
                 dataset.crs = CRS.from_user_input(user_crs)
+            rio_copy(str(staged), str(cog_tmp), driver="COG", compress="DEFLATE", blocksize=512)
+        else:
+            rio_copy(
+                str(ctx.source_path), str(cog_tmp), driver="COG", compress="DEFLATE", blocksize=512
+            )
         cog_key = f"artifacts/{ctx.version_id}/cog.tif"
         content_type = "image/tiff; profile=cloud-optimized"
         self._minio.upload_file(local_path=str(cog_tmp), key=cog_key, content_type=content_type)

@@ -66,6 +66,11 @@ class Settings(BaseSettings):
     # 临时空间预检：低于源文件预计占用的该倍数时任务早期失败
     worker_tmp_min_ratio: float = 2.0
 
+    # Job 执行租约：Worker 认领时取得，运行期间由心跳续约；租约过期由独立恢复器
+    # 回收重投（不依赖 Broker 重投消息恰好到达）
+    job_lease_ttl_seconds: int = 600
+    job_heartbeat_interval_seconds: int = 60
+
     @field_validator("database_url")
     @classmethod
     def _validate_database_url(cls, value: str) -> str:
@@ -86,6 +91,27 @@ class Settings(BaseSettings):
                 "（APP_ACCESS_TOKEN_TTL_SECONDS / APP_REFRESH_TOKEN_TTL_SECONDS）"
             )
         return value
+
+    @field_validator("job_heartbeat_interval_seconds", "job_lease_ttl_seconds")
+    @classmethod
+    def _validate_lease_fields(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError(
+                "Job 租约配置必须为正整数秒"
+                "（APP_JOB_HEARTBEAT_INTERVAL_SECONDS / APP_JOB_LEASE_TTL_SECONDS）"
+            )
+        return value
+
+    @model_validator(mode="after")
+    def _validate_lease_ttl_beats_heartbeat(self) -> Self:
+        # TTL 必须≥若干个心跳周期，否则一次心跳抖动就会导致任务被误回收
+        if self.job_lease_ttl_seconds <= self.job_heartbeat_interval_seconds:
+            raise ValueError(
+                f"APP_JOB_LEASE_TTL_SECONDS（{self.job_lease_ttl_seconds}s）必须大于 "
+                f"APP_JOB_HEARTBEAT_INTERVAL_SECONDS（{self.job_heartbeat_interval_seconds}s），"
+                "否则心跳抖动会造成任务被误回收"
+            )
+        return self
 
     @model_validator(mode="after")
     def _validate_jwt_secret_in_production(self) -> Self:
