@@ -61,8 +61,8 @@ tests/fixtures/     # 验收夹具
 doc/                # 总体架构、阶段方案、迁移矩阵、验收基线
 ```
 
-已随 Stage 5 落地的模块：`monitoring`（监测计划、occurrence、执行与输入快照）；其派发接缝
-`DeferredRunDispatcher` 待接线，接线前不要创建其他空目录。
+已随 Stage 5 落地的模块：`monitoring`（监测计划、occurrence、执行与输入快照）；其派发链路
+已闭环（`monitoring.dispatch.JobRunDispatcher` + `monitoring.execution` 快照审计任务）；剩余 A5.1–A5.5 人工验收。
 
 每个已落地模块内部按 `router / schemas / service / models` 组织。本模块查询可以写在 Service；只有查询复杂到需要独立测试或复用时才抽取 Repository。模块之间通过公开 Service 协作，不跨模块直接访问 ORM 或内部实现。
 

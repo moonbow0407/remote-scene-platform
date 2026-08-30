@@ -18,7 +18,7 @@ def make_celery_app() -> Celery:
         "geo_worker",
         broker=settings.rabbitmq_url,
         backend=None,
-        include=["app.processing.tasks"],
+        include=["app.processing.tasks", "app.monitoring.tasks"],
     )
     app.conf.update(
         task_default_queue="geo",

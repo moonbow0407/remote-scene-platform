@@ -31,6 +31,7 @@ from app.context import ActorContext, get_actor, now_utc
 from app.ecology.service import EcologyService
 from app.errors import ProblemError, conflict, not_found, validation_error
 from app.ids import new_uuid7
+from app.monitoring.dispatch import JobRunDispatcher
 from app.monitoring.enums import (
     OccurrenceStatus,
     OccurrenceTrigger,
@@ -83,41 +84,17 @@ def _from_db(value: datetime) -> datetime:
 class RunDispatcher(Protocol):
     """执行派发接缝：MonitoringRun → Job + Outbox → Dispatcher → RabbitMQ。
 
-    实现必须复用 `JobService.create_job_with_outbox`（或其同等公共接口），
-    禁止直接 `celery.send_task` 或自行发布 RabbitMQ 消息；occurrence/Run/快照
-    与 Job+Outbox 的原子性由"同一 Session 同一事务"保证。
+    生产实现为 `app.monitoring.dispatch.JobRunDispatcher`（复用
+    `JobService.create_job_with_outbox` 同事务创建任务与投递事件）；
+    禁止直接 `celery.send_task` 或自行发布 RabbitMQ 消息。occurrence/Run/
+    快照与 Job+Outbox 的原子性由"同一 Session 同一事务"保证。
     """
 
     def dispatch(
         self, session: Session, run: MonitoringRun, input_version_ids: list[UUID]
     ) -> UUID | None:
-        """创建执行任务并返回 job_id；返回 None 表示当前环境未接线真实任务。"""
+        """创建执行任务并返回 job_id；返回 None 仅供测试替身表示"未派发"。"""
         ...
-
-
-class DeferredRunDispatcher:
-    """首版默认派发器：不创建 Job，Run 保持 PENDING，仅记录接缝日志。
-
-    TODO(dispatch-adapter)：待并行可靠性修复合入后在此接线真实派发。当前无法
-    直接调用 `JobService.create_job_with_outbox` 的原因：
-    1. `Job.asset_version_id` 为 NOT NULL 的单版本语义，与 Run 的多版本输入快照
-       不匹配；放宽该列需要修改 jobs/**（并行修复范围，本任务禁止触碰）；
-    2. `JobType` 尚无 MONITORING_RUN，且仓库没有监测算法任务——按 AGENTS.md
-       不得伪造空算法任务，否则 Job 将永远滞留 QUEUED。
-    接线方式：在此调用 `JobService.create_job_with_outbox`（新增 MONITORING_RUN
-    任务类型，payload 携带 run_id 与输入快照版本集合），并回写 run.job_id。
-    本模块侧的幂等（occurrence 唯一）与快照冻结无需改动。
-    """
-
-    def dispatch(
-        self, session: Session, run: MonitoringRun, input_version_ids: list[UUID]
-    ) -> UUID | None:
-        logger.warning(
-            "监测执行 %s 暂未接线 Job 派发（依赖并行可靠性修复），保持 PENDING",
-            run.id,
-            extra={"run_id": str(run.id), "input_count": len(input_version_ids)},
-        )
-        return None
 
 
 @dataclass(frozen=True)
@@ -153,7 +130,9 @@ def _dedupe_preserving_order(ids: Sequence[UUID]) -> list[UUID]:
 class MonitoringService:
     def __init__(self, session: Session, dispatcher: RunDispatcher | None = None) -> None:
         self._session = session
-        self._dispatcher = dispatcher or DeferredRunDispatcher()
+        # 默认生产派发器：同事务创建 MONITORING_RUN Job + Outbox 事件；
+        # 测试经参数注入替身（Recording/Failing 等）
+        self._dispatcher = dispatcher or JobRunDispatcher()
 
     # ---- 计划 CRUD ----
 
@@ -482,10 +461,20 @@ class MonitoringService:
         return views
 
     def mark_run_started(self, run_id: UUID) -> MonitoringRun:
-        """执行方开始处理（PENDING → RUNNING）。由监测执行方经接缝调用。"""
-        run = self._require_run_in_status(run_id, RunStatus.PENDING)
-        run.status = RunStatus.RUNNING
-        run.started_at = now_utc()
+        """执行方开始处理（PENDING → RUNNING）。由监测执行方经接缝调用。
+
+        幂等：至少一次投递下，租约回收后的重试尝试会再次到达本方法；执行已
+        处于 RUNNING（上次尝试已标记开始）视为已满足，直接返回，不报状态冲突。
+        """
+        run = self.get_run_required(run_id)
+        if run.status is RunStatus.PENDING:
+            run.status = RunStatus.RUNNING
+            run.started_at = now_utc()
+        elif run.status is not RunStatus.RUNNING:
+            raise conflict(
+                code="MONITORING_RUN_STATE_INVALID",
+                detail=f"监测执行 {run_id} 当前状态为 {run.status}，要求为 PENDING/RUNNING",
+            )
         self._session.flush()
         return run
 
@@ -506,11 +495,14 @@ class MonitoringService:
         self._session.flush()
         return run
 
-    def mark_run_failed(self, run_id: UUID, *, detail: str) -> MonitoringRun:
+    def mark_run_failed(
+        self, run_id: UUID, *, detail: str, code: str = "MONITORING_RUN_FAILED"
+    ) -> MonitoringRun:
+        """执行失败（RUNNING → FAILED）；code 区分失败类别（如快照损坏 SNAPSHOT_BROKEN）。"""
         run = self._require_run_in_status(run_id, RunStatus.RUNNING)
         run.status = RunStatus.FAILED
         run.finished_at = now_utc()
-        run.diagnostics = {"code": "MONITORING_RUN_FAILED", "detail": detail}
+        run.diagnostics = {"code": code, "detail": detail}
         self._session.flush()
         return run
 

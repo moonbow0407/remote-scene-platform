@@ -190,12 +190,13 @@ class MonitoringRun(Base, TimestampMixin):
     window_anchor: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True), nullable=False, comment="增量窗口上界（选择时刻，UTC）"
     )
-    # 派发的执行任务主键；Job 生命周期归 jobs 模块，删除时置空不连带删除快照
+    # 派发的执行任务主键；Job 生命周期归 jobs 模块，删除时置空不连带删除快照。
+    # 派发由 JobRunDispatcher 在 Run 创建的同一事务中完成，正常恒非空
     job_id: Mapped[UUID | None] = mapped_column(
         sa.Uuid,
         ForeignKey("job.id", ondelete="SET NULL"),
         nullable=True,
-        comment="派发的 Job 主键；首版 dispatch adapter 未接线时为 NULL",
+        comment="派发的 MONITORING_RUN Job 主键（与 Run 同事务创建）",
     )
     started_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)

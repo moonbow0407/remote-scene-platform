@@ -50,15 +50,22 @@ class JobService:
         self,
         *,
         job_type: JobType,
-        asset_version_id: UUID,
         payload: dict[str, Any],
+        asset_version_id: UUID | None = None,
         max_attempts: int = 4,
     ) -> tuple[Job, OutboxEvent]:
         """创建 Job 并同事务生成 Outbox 事件（由调用方的事务提交）。
 
         幂等语义：Job 创建与投递解耦；重复调用会创建重复 Job，
         调用方（上传完成）以唯一会话状态保证只调用一次。
+        asset_version_id 仅入库任务必填；MONITORING_RUN 为多版本输入快照，
+        权威关联在 monitoring_run_input，不伪造单版本引用。
         """
+        if asset_version_id is None and job_type is not JobType.MONITORING_RUN:
+            raise ValueError(
+                f"任务类型 {job_type.value} 必须引用具体 asset_version_id；"
+                "仅 MONITORING_RUN 允许无单版本引用"
+            )
         job_id = new_uuid7()
         job = Job(
             id=job_id,

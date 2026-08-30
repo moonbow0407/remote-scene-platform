@@ -46,8 +46,11 @@ class Job(Base, TimestampMixin):
     max_attempts: Mapped[int] = mapped_column(sa.SmallInteger, nullable=False, default=4)
     # 最近一次错误的诊断（确定性/瞬时/缺输入），JSON 结构：{code, detail, transient}
     last_error: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    # 入库任务（RASTER/VECTOR/ATTACHMENT_INGESTION）的唯一目标版本；
+    # MONITORING_RUN 为 NULL——监测执行是多版本输入快照，权威关联在
+    # monitoring_run_input（Run 引用的版本行受 RESTRICT 保护，语义不弱化）
     asset_version_id: Mapped[Any] = mapped_column(
-        sa.Uuid, ForeignKey("asset_version.id", ondelete="CASCADE"), nullable=False, index=True
+        sa.Uuid, ForeignKey("asset_version.id", ondelete="CASCADE"), nullable=True, index=True
     )
     queued_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)

@@ -24,7 +24,8 @@ from sqlalchemy.orm import Session
 from app.context import now_utc
 from app.db import create_engine, make_session_factory, session_scope
 from app.logging import configure_logging
-from app.monitoring.service import DeferredRunDispatcher, MonitoringService
+from app.model_registry import *  # noqa: F403  确保外键目标表全部注册
+from app.monitoring.service import MonitoringService
 from app.settings import get_settings
 
 logger = logging.getLogger("app.scheduler")
@@ -63,7 +64,8 @@ def _release_advisory_lock(connection: sa.Connection) -> None:
 
 
 def _run_tick(session: Session) -> None:
-    summary = MonitoringService(session, DeferredRunDispatcher()).process_due_plans(now=now_utc())
+    # 默认派发器 JobRunDispatcher：occurrence/Run/快照/Job+Outbox 在本事务原子提交
+    summary = MonitoringService(session).process_due_plans(now=now_utc())
     if summary.plans_considered or summary.missed_recorded:
         logger.info(
             "调度扫描完成",

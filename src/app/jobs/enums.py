@@ -16,12 +16,17 @@ class JobType(StrEnum):
     RASTER_INGESTION = "RASTER_INGESTION"
     VECTOR_INGESTION = "VECTOR_INGESTION"
     ATTACHMENT_INGESTION = "ATTACHMENT_INGESTION"
+    # 监测执行：无单版本引用（多版本输入快照见 monitoring_run_input），
+    # 由监测模块经 RunDispatcher 接缝同事务创建，Geo Worker 中的
+    # monitoring.execute_run 任务认领执行
+    MONITORING_RUN = "MONITORING_RUN"
 
 
 TASK_BY_JOB_TYPE: dict[JobType, str] = {
     JobType.RASTER_INGESTION: "processing.ingest_raster",
     JobType.VECTOR_INGESTION: "processing.ingest_vector",
     JobType.ATTACHMENT_INGESTION: "processing.ingest_attachment",
+    JobType.MONITORING_RUN: "monitoring.execute_run",
 }
 
 

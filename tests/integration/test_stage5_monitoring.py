@@ -5,6 +5,7 @@
 - occurrence 唯一约束在真实并发下的幂等（两个 Scheduler 会话竞争同一周期，
   只产生一次执行与一次派发请求）；
 - 手动触发路径在真实数据库上的 occurrence/run 落库；
+- 真实派发器：Run 与 MONITORING_RUN Job + Outbox 事件同事务落库；
 - Scheduler 进程层 pg advisory lock 互斥；
 - PAUSED 计划在真实扫描查询下不参与调度。
 
@@ -30,6 +31,8 @@ from app.assets.enums import AssetSource, AssetType, AssetVersionStatus
 from app.assets.models import AssetVersion, RasterAssetVersion
 from app.assets.service import AssetService
 from app.db import make_session_factory, session_scope
+from app.jobs.enums import JobStatus, JobType, OutboxStatus
+from app.jobs.models import Job, OutboxEvent
 from app.monitoring.enums import (
     OccurrenceStatus,
     OccurrenceTrigger,
@@ -105,7 +108,7 @@ def _spatial_region() -> tuple[dict[str, object], str, str]:
     集成库跨测试/跨重放共享：随机偏移保证本测试的边界与既有数据空间不相交，
     断言可确定地重放。
     """
-    offset = random.randint(0, 100)
+    offset = random.uniform(-170.0, -150.0)  # 西经随机带：与共享库既有数据（东经 0-121）空间不相交
 
     def _polygon(x0: float, y0: float) -> str:
         return (
@@ -299,3 +302,28 @@ def test_advisory_lock_is_mutually_exclusive() -> None:
             _release_advisory_lock(second)
     finally:
         engine.dispose()
+
+
+def test_trigger_dispatches_real_job_and_outbox(factory: sessionmaker[Session]) -> None:
+    """真实派发器：Run 与 MONITORING_RUN Job + Outbox 事件同事务落库。"""
+    with session_scope(factory) as session:
+        service = MonitoringService(session)  # 默认派发器 JobRunDispatcher
+        boundary, inside, _outside = _spatial_region()
+        plan = _make_plan(session, service, name="真实派发集成", boundary=boundary)
+        version = _seed_raster_version(session, name="真实派发输入", footprint_wkt=inside)
+        run = service.trigger_plan(plan.id)
+
+        assert run.job_id is not None
+        job = session.get(Job, run.job_id)
+        assert job is not None
+        assert job.job_type is JobType.MONITORING_RUN
+        assert job.status is JobStatus.PENDING
+        # 监测执行无单版本引用；权威输入关联在 monitoring_run_input
+        assert job.asset_version_id is None
+        assert job.payload["run_id"] == str(run.id)
+        event = session.scalar(sa.select(OutboxEvent).where(OutboxEvent.aggregate_id == job.id))
+        assert event is not None
+        assert event.status is OutboxStatus.PENDING
+        assert event.payload["task"] == "monitoring.execute_run"
+        assert event.payload["args"] == [str(job.id)]
+        assert _input_version_ids(session, run.id) == {version.id}

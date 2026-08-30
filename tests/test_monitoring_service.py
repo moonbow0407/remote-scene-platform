@@ -51,7 +51,7 @@ from app.monitoring.models import (
 )
 from app.monitoring.schemas import PlanCreate, PlanUpdate
 from app.monitoring.selection import SelectionCriteria, is_in_window, select_ready_versions
-from app.monitoring.service import DeferredRunDispatcher, MonitoringService, RunDispatcher
+from app.monitoring.service import MonitoringService, RunDispatcher
 from app.pagination import PageParams
 
 T0 = datetime(2026, 8, 30, tzinfo=UTC)
@@ -178,7 +178,9 @@ def _disable_spatial_in_service_tests(no_spatial_filter: None) -> None:
 
 
 def _service(session: Session, dispatcher: RunDispatcher | None = None) -> MonitoringService:
-    return MonitoringService(session, dispatcher)
+    # 单元测试默认注入替身（不落 Job/Outbox）；真实派发器 JobRunDispatcher 的
+    # 行为由 tests/test_monitoring_dispatch.py 与 PostgreSQL 集成测试覆盖
+    return MonitoringService(session, dispatcher or RecordingDispatcher())
 
 
 def _plan_body(**overrides: object) -> PlanCreate:
@@ -786,7 +788,7 @@ def test_failed_run_does_not_advance_window(
 def test_run_state_transitions_validated(factory: sessionmaker[Session]) -> None:
     with session_scope(factory) as session:
         _seed_ready_version(session, name="资产A")
-        service, plan = _create_plan(session, DeferredRunDispatcher())
+        service, plan = _create_plan(session, RecordingDispatcher())
         run = service.trigger_plan(plan.id)
         with pytest.raises(ProblemError) as exc_info:
             service.mark_run_succeeded(run.id)  # PENDING 不能直接成功
@@ -803,7 +805,7 @@ def test_run_state_transitions_validated(factory: sessionmaker[Session]) -> None
 def test_list_runs_and_inputs(factory: sessionmaker[Session]) -> None:
     with session_scope(factory) as session:
         _seed_ready_version(session, name="资产A")
-        service, plan = _create_plan(session, DeferredRunDispatcher())
+        service, plan = _create_plan(session, RecordingDispatcher())
         run = service.trigger_plan(plan.id)
         page = service.list_runs(plan.id, PageParams())
         assert page.total == 1

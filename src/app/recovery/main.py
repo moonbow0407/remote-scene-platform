@@ -15,6 +15,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.db import create_engine, make_session_factory, session_scope
 from app.jobs.recovery import recover_expired_leases
 from app.logging import configure_logging
+from app.model_registry import *  # noqa: F403  确保外键目标表全部注册
 from app.settings import get_settings
 
 logger = logging.getLogger("app.recovery")

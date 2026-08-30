@@ -94,8 +94,23 @@ def test_concurrent_upload_completion_creates_one_version_and_job(
             )
             == 1
         )
-        assert session.scalar(sa.select(sa.func.count()).select_from(Job)) == 1
-        assert session.scalar(sa.select(sa.func.count()).select_from(OutboxEvent)) == 1
+        # 共享集成库中存在其他用例的任务与事件：只统计本资产版本派生的行
+        version_ids = sa.select(AssetVersion.id).where(AssetVersion.asset_id == asset_id)
+        job_ids = sa.select(Job.id).where(Job.asset_version_id.in_(version_ids))
+        assert (
+            session.scalar(
+                sa.select(sa.func.count()).select_from(Job).where(Job.id.in_(job_ids))
+            )
+            == 1
+        )
+        assert (
+            session.scalar(
+                sa.select(sa.func.count())
+                .select_from(OutboxEvent)
+                .where(OutboxEvent.aggregate_id.in_(job_ids))
+            )
+            == 1
+        )
 
 
 def test_pending_job_is_claimed_once_under_duplicate_delivery(
@@ -220,7 +235,19 @@ def test_concurrent_complete_and_abort_do_not_diverge(
             )
             or 0
         )
-        job_count = int(session.scalar(sa.select(sa.func.count()).select_from(Job)) or 0)
+        # 共享集成库中存在其他用例的任务：只统计本资产版本派生的 Job
+        job_count = int(
+            session.scalar(
+                sa.select(sa.func.count())
+                .select_from(Job)
+                .where(
+                    Job.asset_version_id.in_(
+                        sa.select(AssetVersion.id).where(AssetVersion.asset_id == asset_id)
+                    )
+                )
+            )
+            or 0
+        )
         if row.status is UploadSessionStatus.COMPLETED:
             assert version_count == 1
             assert job_count == 1

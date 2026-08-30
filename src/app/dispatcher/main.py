@@ -23,6 +23,7 @@ from app.db import create_engine, make_session_factory, session_scope
 from app.jobs.models import OutboxEvent
 from app.jobs.service import OutboxRepository
 from app.logging import configure_logging
+from app.model_registry import *  # noqa: F403  确保外键目标表全部注册
 from app.settings import get_settings
 from app.worker.celery_app import celery
 
