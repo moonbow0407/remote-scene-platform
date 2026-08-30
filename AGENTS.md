@@ -53,8 +53,10 @@ src/app/
 ├── tiles/          # 短期瓦片令牌签发与 Nginx 校验
 ├── dispatcher/     # Outbox 投递循环
 ├── worker/         # Celery Geo Worker 入口
-└── scheduler/      # 独立 Scheduler（Stage 5 实装评估循环）
-alembic/            # 迁移（0001 PostGIS，0002 栅格，0003 矢量/附件，0004 用户，0005 目录/生态）
+├── scheduler/      # 独立 Scheduler（Stage 5 实装评估循环）
+├── recovery/       # Job 执行租约过期回收
+└── cleanup/        # Stage 6 过期资产与 MinIO 对象异步清理
+alembic/            # 0001–0010（0010 为 Stage 6 生命周期与运维索引）
 docker/             # api/worker 镜像与 Nginx
 tests/              # 进程内测试；integration 需显式基础设施
 tests/fixtures/     # 验收夹具

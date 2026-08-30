@@ -23,7 +23,11 @@ ALLOWED_VERSION_TRANSITIONS: dict[AssetVersionStatus, frozenset[AssetVersionStat
         {AssetVersionStatus.READY, AssetVersionStatus.FAILED, AssetVersionStatus.NEEDS_INPUT}
     ),
     AssetVersionStatus.NEEDS_INPUT: frozenset(
-        {AssetVersionStatus.PROCESSING, AssetVersionStatus.DELETED}
+        {
+            AssetVersionStatus.PROCESSING,
+            AssetVersionStatus.FAILED,
+            AssetVersionStatus.DELETED,
+        }
     ),
     AssetVersionStatus.READY: frozenset({AssetVersionStatus.DELETED}),
     AssetVersionStatus.FAILED: frozenset({AssetVersionStatus.DELETED}),

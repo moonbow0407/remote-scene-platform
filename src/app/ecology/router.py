@@ -143,6 +143,16 @@ def create_mapping(
     return _mapping_response(service.create_mapping(body))
 
 
+@router.put("/mappings/{mapping_id}", response_model=MappingResponse)
+def update_mapping(
+    mapping_id: UUID,
+    body: MappingCreate,
+    service: Annotated[EcologyService, Depends(_get_service)],
+) -> MappingResponse:
+    get_actor()
+    return _mapping_response(service.update_mapping(mapping_id, body))
+
+
 @router.delete("/mappings/{mapping_id}", status_code=204)
 def delete_mapping(
     mapping_id: UUID, service: Annotated[EcologyService, Depends(_get_service)]

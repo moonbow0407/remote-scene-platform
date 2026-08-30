@@ -2,14 +2,19 @@
 
 import hashlib
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 
 from app.processing.common import (
+    IngestionContext,
     cleanup_tmp_dir,
     is_complete_local_file,
+    preflight_tmp,
     write_chunks_atomically,
 )
+from app.processing.errors import DeterministicError
+from app.settings import Settings
 
 
 def test_incomplete_local_file_is_not_treated_as_complete(tmp_path: Path) -> None:
@@ -42,3 +47,21 @@ def test_cleanup_tmp_dir_removes_job_workspace(tmp_path: Path) -> None:
     cleanup_tmp_dir(job_dir)
     assert not job_dir.exists()
     cleanup_tmp_dir(job_dir)
+
+
+def test_preflight_disk_exhaustion_fails_early_with_stable_code(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    usage = type("Usage", (), {"free": 99})()
+    monkeypatch.setattr("app.processing.common.shutil.disk_usage", lambda path: usage)
+    ctx = IngestionContext(
+        job_id=uuid4(),
+        version_id=uuid4(),
+        source_object_key="uploads/test/source",
+        source_size_bytes=100,
+        tmp_dir=tmp_path / "job",
+    )
+    with pytest.raises(DeterministicError) as exc_info:
+        preflight_tmp(ctx, Settings(worker_tmp_min_ratio=2.0))
+    assert exc_info.value.code == "TEMP_STORAGE_INSUFFICIENT"
+    assert "临时空间不足" in exc_info.value.detail

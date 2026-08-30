@@ -39,7 +39,7 @@ from app.context import now_utc
 from app.db import make_session_factory, session_scope
 from app.jobs.enums import JobStatus, OutboxStatus
 from app.jobs.models import Job, OutboxEvent
-from app.monitoring.enums import RunStatus
+from app.monitoring.enums import RunStatus, ScheduleType
 from app.monitoring.models import MonitoringRun, MonitoringRunInput
 from app.monitoring.schemas import PlanCreate
 from app.monitoring.service import MonitoringService
@@ -165,7 +165,7 @@ def _make_plan(
         PlanCreate(
             name=name,
             boundary=boundary,
-            schedule_type="INTERVAL",
+            schedule_type=ScheduleType.INTERVAL,
             schedule_expression="P1D",
             timezone="UTC",
         )

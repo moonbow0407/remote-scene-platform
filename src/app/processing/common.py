@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-from app.processing.errors import TransientError
 from app.settings import Settings
 
 logger = logging.getLogger(__name__)
@@ -88,6 +87,22 @@ def preflight_tmp(ctx: IngestionContext, settings: Settings) -> None:
     usage = shutil.disk_usage(ctx.tmp_dir)
     required = ctx.source_size_bytes * settings.worker_tmp_min_ratio
     if usage.free < required:
-        raise TransientError(
-            f"临时空间不足：可用 {usage.free} 字节，任务需要约 {required:.0f} 字节"
+        from app.processing.errors import DeterministicError
+
+        raise DeterministicError(
+            "TEMP_STORAGE_INSUFFICIENT",
+            f"临时空间不足：可用 {usage.free} 字节，任务需要约 {required:.0f} 字节；"
+            "请扩容 APP_WORKER_TMP_DIR 所在磁盘后重新创建版本",
         )
+
+
+def cancellation_checkpoint(ctx: IngestionContext, engine: Any) -> None:
+    """每个可恢复步骤前检查取消标志；取消状态与事件在同一数据库事务落库。"""
+    from app.db import session_scope
+    from app.jobs.service import JobService
+    from app.processing.errors import ProcessingCancelledError
+
+    with session_scope(engine) as session:
+        cancelled = JobService(session).cancellation_checkpoint(ctx.job_id)
+    if cancelled:
+        raise ProcessingCancelledError(f"任务 {ctx.job_id} 已取消")

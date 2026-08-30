@@ -28,13 +28,13 @@ MinIO 保存不可变对象，RabbitMQ 仅负责消息传递，TiTiler 由 Nginx
 | **Stage 2** 栅格纵向闭环 | 主体已落地 | 上传 → Outbox → Worker → COG → PostGIS → 瓦片令牌。关闭与否以 A2.1–A2.10 为准 |
 | **Stage 3** 矢量与附件 | 主体已落地 | 同一资产生命周期上 GeoJSON/Shapefile/GPKG 导入、附件 READY、要素空间检索、JSON Schema。关闭与否以 A3.1–A3.5 为准 |
 | **Stage 4** 目录与生态映射 | 已完成 | 资源目录树、卫星/传感器、生态参数与显式多对多映射；资产分类外键；检索按目录（含子树）/卫星/传感器/生态映射过滤。A4.1–A4.3 已在 Compose 上通过 |
-| **Stage 5** 监测计划与调度 | 已落地 | 计划/occurrence/执行/输入快照模型，RRULE 与固定间隔，Scheduler 互斥锁与停机补跑，增量资产选择，不可变输入快照；执行经 Job(MONITORING_RUN)+Outbox→RabbitMQ→Geo Worker 快照审计闭环。真实 Broker/Worker 全链路集成测试通过；A5.1–A5.5 人工验收待 Compose 执行 |
-| **Stage 6** 生命周期与可靠性 | 未开始 | 软删除与 7 天恢复、无引用对象清理、超时/取消、运维指标 |
-| **Stage 7** 迁移收口 | 未开始 | 矩阵核对、全量验收、OpenAPI 与前端交接 |
+| **Stage 5** 监测计划与调度 | 主体已落地 | 计划/occurrence/执行/输入快照模型，RRULE 与固定间隔，Scheduler 互斥锁与停机补跑，增量资产选择，不可变输入快照；执行经 Job(MONITORING_RUN)+Outbox→RabbitMQ→Geo Worker 快照审计闭环。真实 Broker/Worker 全链路集成测试通过；A5.1–A5.5 人工验收待 Compose 执行 |
+| **Stage 6** 生命周期与可靠性 | 主体已落地 | 软删除/7 天恢复、异步物理清理与共享 blob 保护、MinIO 退避删除；任务租约/取消检查点/软硬时限/临时盘预检；队列、Job、Worker、存储指标与 Grafana 面板。关闭与否以 A6.1–A6.4 为准 |
+| **Stage 7** 迁移收口 | 进行中 | 57 项矩阵静态核对、OpenAPI RFC 9457 契约、发布/备份/排障与前端接入文档已落地；A7.2 干净 Compose 全量验收仍是关闭门禁 |
 
-**当前工作：Stage 5 监测计划与调度已落地（派发链路闭环）；剩余 Stage 5 人工验收 A5.1–A5.5 与 Stage 6 可靠性增量。**
+**当前工作：Stage 6 主体实现与 Stage 7 静态收口已落地；正在执行 A1–A6 干净 Compose 验收，未通过前不宣称 Stage 6/7 已完成。**
 
-## 已交付能力（截至 Stage 5）
+## 已交付能力（截至 Stage 6 主体与 Stage 7 静态收口）
 
 对外入口：`http://localhost:8080`，业务 API 前缀 `/api/v1`。
 
@@ -49,6 +49,7 @@ MinIO 保存不可变对象，RabbitMQ 仅负责消息传递，TiTiler 由 Nginx
 | 缺 CRS 续跑 | `POST /api/v1/assets/{id}/versions/{vid}/inputs` |
 | 工件下载 | `GET /api/v1/assets/{id}/versions/{vid}/artifacts/{kind}/download-url` |
 | Job 轮询 | `GET /api/v1/jobs/{job_id}` |
+| Job 取消 | `POST /api/v1/jobs/{job_id}/cancel`（运行中在步骤检查点收敛） |
 | 瓦片 URL | `GET /api/v1/assets/{id}/versions/{vid}/tile-url`（经 Nginx `/tiles/`，无令牌拒绝） |
 | 追加版本 | `POST /api/v1/uploads/sessions` 带 `asset_id` |
 | 要素检索 | `POST /api/v1/assets/{id}/versions/{vid}/features/search` |
@@ -57,12 +58,15 @@ MinIO 保存不可变对象，RabbitMQ 仅负责消息传递，TiTiler 由 Nginx
 | 资源目录 | `GET/POST /api/v1/catalogs/resources`、`…/tree`、`…/{id}` |
 | 卫星 / 传感器 | `GET/POST /api/v1/catalogs/satellites`、`…/sensors`、`GET …/satellites/{id}/sensors` |
 | 生态参数 | `GET/POST /api/v1/ecology/parameters`、`…/tree`、`…/{id}` |
-| 生态↔资源映射 | `GET/POST /api/v1/ecology/mappings`、`POST …/mappings/batch` |
+| 生态↔资源映射 | `GET/POST/PUT /api/v1/ecology/mappings`、`POST …/mappings/batch` |
+| 资产删除与恢复 | `DELETE /api/v1/assets/{id}`、`POST …/assets/{id}/restore`（默认 7 天） |
 | 监测计划 | `GET/POST /api/v1/monitoring/plans`、`GET/PUT/DELETE …/plans/{id}` |
 | 计划暂停/恢复/手动触发 | `POST …/plans/{id}/pause`、`…/resume`、`…/trigger` |
 | 监测执行与输入快照 | `GET …/plans/{id}/runs`、`GET /api/v1/monitoring/runs/{id}`、`…/inputs`；执行方状态接缝 `POST …/runs/{id}/start|succeed|fail` |
 
-Prometheus 指标 `GET /api/v1/metrics` 仅 Compose 内网抓取，Nginx 对外返回 404。
+Prometheus 指标 `GET /api/v1/metrics` 仅 Compose 内网抓取，Nginx 对外返回 404。Stage 6
+指标覆盖 Outbox/RabbitMQ 积压、Job 状态/失败/处理时长、Worker 消费者/利用率、存储与
+清理积压；`observability` profile 自动加载 Grafana 运维面板。
 
 上传支持栅格 TIFF、矢量（GeoJSON / Shapefile ZIP / GeoPackage）和普通附件；创建会话可同时绑定资源目录、卫星与传感器。监测计划支持固定间隔（ISO 8601 duration 子集）与 RRULE（RFC 5545）调度：到期由独立 Scheduler 扫描派发（多实例经 PostgreSQL advisory lock 互斥，occurrence `(plan_id, scheduled_for)` 数据库唯一），停机只补跑最近一次、其余周期记 `MISSED`；每次执行按增量窗口（上次成功执行之后）选择 READY 资产版本并冻结不可变输入快照。执行派发与 Job(MONITORING_RUN)+Outbox 同事务创建，由 Dispatcher 投递、Geo Worker 中的监测执行任务认领，完成输入快照执行期审计后推进 Run 与 Job 终态。
 
@@ -102,6 +106,8 @@ uv run alembic upgrade head     # 迁移（需可达 PostgreSQL）
 | worker | Celery Geo Worker，队列 `geo`，并发 2 | `app.worker.celery_app:celery` |
 | dispatcher | Outbox 投递循环 | `python -m app.dispatcher.main` |
 | scheduler | 监测计划调度循环：advisory lock 互斥 + 到期扫描 + occurrence 幂等派发 + 停机补跑 | `python -m app.scheduler.main` |
+| recovery | 回收租约过期的 RUNNING Job并经 Outbox 重投 | `python -m app.recovery.main` |
+| cleanup | 过期资产物理清理、blob 引用复核与 MinIO 退避删除 | `python -m app.cleanup.main` |
 | nginx | 唯一对外入口 `:8080`；`/tiles/` fail-closed，令牌由 API 校验 | — |
 
 基础设施：PostgreSQL/PostGIS 16-3.4、MinIO（本机 `127.0.0.1:9000`）、RabbitMQ 3.13（Management 仅内网）、TiTiler、
@@ -127,16 +133,23 @@ src/app/
 ├── tiles/      # 短期瓦片令牌
 ├── worker/     # Celery Geo Worker
 ├── dispatcher/ # Outbox Dispatcher
-└── scheduler/  # 独立 Scheduler
-alembic/        # 迁移（0001 PostGIS，0002 栅格，0003 矢量/附件，0004 用户，0005 目录/生态与资产外键，0006 上传会话属性，0007 Job 租约，0008 监测计划/occurrence/执行/输入快照，0009 监测执行任务放宽单版本引用）
+├── scheduler/  # 独立 Scheduler
+├── recovery/   # Job 租约过期恢复
+└── cleanup/    # Stage 6 资产/对象异步清理
+alembic/        # 0001–0010（0010：软删除、对象清理任务与运维索引）
 docker/         # api/worker 镜像与 Nginx 配置
 prometheus/     # 抓取配置
+grafana/        # 自动配置的 Prometheus 数据源与 Stage 6 运维面板
 doc/            # 架构、阶段方案、迁移矩阵、验收基线
 tests/          # 进程内测试；集成测试随阶段补充
 ```
 
-尚未落地：Stage 5 全链路人工验收 A5.1–A5.5（需 Compose 环境）；监测算法类工作负载
-（生态参数计算）按 AGENTS.md 约束不在首版范围，当前执行语义为输入快照执行期审计。不要预先建其他空目录。
+尚未关闭：Stage 2/3/5 的剩余人工场景、A6.1–A6.4 与 A7.2 干净环境全量重放；
+2–100 GB 代表性演练受实际硬件容量约束。监测算法类工作负载（生态参数计算）按
+AGENTS.md 约束不在首版范围，当前执行语义为输入快照执行期审计。
+
+发布、备份/恢复、排障与限制见 `doc/发布与运维手册.md`；前端只需 OpenAPI
+`/api/v1/openapi.json` 与 `doc/前端接入指南.md` 即可完成上传、轮询、下载和瓦片联调。
 
 ## 约定摘要
 

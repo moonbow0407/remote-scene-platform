@@ -21,6 +21,7 @@ import logging
 from typing import Any
 from uuid import UUID
 
+from billiard.exceptions import SoftTimeLimitExceeded
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -116,6 +117,13 @@ def execute_monitoring_run(
             )
             return
         logger.info("监测执行完成", extra={"job_id": job_id})
+        return
+    except SoftTimeLimitExceeded:
+        detail = f"任务超过软时限 {settings.worker_task_soft_timeout_seconds} 秒，已停止处理"
+        with session_scope(session_factory) as session:
+            _finalize_run_failure(session, run_id, detail=detail)
+            _fail_job_in_session(session, job_uuid, code="TASK_TIMEOUT", detail=detail)
+        logger.error("监测执行达到软时限，已落失败诊断", extra={"job_id": job_id})
         return
     except (SQLAlchemyError, OSError) as exc:
         # 仅明确的基础设施错误重试；快照损坏已在审计内按确定性失败处理

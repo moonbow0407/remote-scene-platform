@@ -11,7 +11,12 @@ from app.db import session_scope
 from app.jobs.enums import JobStatus
 from app.jobs.service import JobService
 from app.processing.blob import hash_dedup_original, resolve_input_object
-from app.processing.common import IngestionContext, cleanup_tmp_dir, preflight_tmp
+from app.processing.common import (
+    IngestionContext,
+    cancellation_checkpoint,
+    cleanup_tmp_dir,
+    preflight_tmp,
+)
 from app.processing.detect import DetectedKind, sniff_head
 from app.processing.errors import DeterministicError
 from app.settings import Settings
@@ -30,11 +35,15 @@ class AttachmentIngestion:
         cleanup_tmp_dir(ctx.tmp_dir)
         try:
             preflight_tmp(ctx, self._settings)
+            cancellation_checkpoint(ctx, self._engine)
             detected, mime = self._step_validate(ctx)
+            cancellation_checkpoint(ctx, self._engine)
             hash_dedup_original(
                 minio=self._minio, engine=self._engine, ctx=ctx, content_type=mime
             )
+            cancellation_checkpoint(ctx, self._engine)
             self._step_register(ctx, detected, mime)
+            cancellation_checkpoint(ctx, self._engine)
             self._step_finalize(ctx)
         finally:
             cleanup_tmp_dir(ctx.tmp_dir)

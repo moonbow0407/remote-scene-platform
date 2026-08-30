@@ -1,5 +1,5 @@
-# Prometheus 基线抓取配置：Stage 1 覆盖 API 进程；
-# Worker/Dispatcher/Scheduler 指标随 Stage 6 可观测性工作补充。
+# Prometheus 抓取 API 暴露的 HTTP 与 Stage 6 聚合运维指标；队列和 Worker 状态
+# 由 API 采集 RabbitMQ Management，Job/Outbox/存储状态从 PostgreSQL 读取。
 global:
   scrape_interval: 15s
 

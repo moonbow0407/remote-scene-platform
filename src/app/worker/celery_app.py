@@ -26,6 +26,8 @@ def make_celery_app() -> Celery:
         task_reject_on_worker_lost=True,
         worker_prefetch_multiplier=1,
         task_track_started=True,
+        task_soft_time_limit=settings.worker_task_soft_timeout_seconds,
+        task_time_limit=settings.worker_task_hard_timeout_seconds,
         broker_transport_options={"confirm_publish": True},
     )
     return app

@@ -33,3 +33,19 @@ class ArtifactKind(StrEnum):
     ORIGINAL = "ORIGINAL"
     COG = "COG"
     THUMBNAIL = "THUMBNAIL"
+
+
+class ObjectCleanupKind(StrEnum):
+    """对象清理类型：共享原件与版本独占工件采用不同引用判定。"""
+
+    BLOB = "BLOB"
+    ARTIFACT = "ARTIFACT"
+
+
+class ObjectCleanupStatus(StrEnum):
+    """跨 PostgreSQL/MinIO 清理任务状态。"""
+
+    PENDING = "PENDING"
+    CLAIMED = "CLAIMED"
+    RETRYING = "RETRYING"
+    SUCCEEDED = "SUCCEEDED"

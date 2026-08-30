@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.assets.enums import ArtifactKind, AssetVersionStatus
 from app.assets.geometry import GeometryValidationError, geojson_to_wkt
+from app.assets.lifecycle import AssetLifecycleService
 from app.assets.models import AssetVersion
 from app.assets.schemas import (
     ArtifactResponse,
@@ -141,6 +142,31 @@ def update_asset(
         set_fields=set(data),
     )
     return _asset_detail(service, asset)
+
+
+@router.delete("/{asset_id}", status_code=204)
+def delete_asset(
+    asset_id: UUID,
+    request: Request,
+    session: Annotated[Session, Depends(_get_session)],
+) -> None:
+    """软删除资产并启动恢复期；未完成入库任务同步请求取消。"""
+    AssetLifecycleService(session).soft_delete(
+        asset_id,
+        retention_days=request.app.state.settings.asset_retention_days,
+        actor=get_actor(),
+    )
+
+
+@router.post("/{asset_id}/restore", response_model=AssetDetailResponse)
+def restore_asset(
+    asset_id: UUID,
+    session: Annotated[Session, Depends(_get_session)],
+) -> AssetDetailResponse:
+    """在恢复期内恢复逻辑资产；过期后返回稳定的 409 problem。"""
+    lifecycle = AssetLifecycleService(session)
+    asset = lifecycle.restore(asset_id)
+    return _asset_detail(AssetService(session), asset)
 
 
 @router.get("/{asset_id}/versions", response_model=Page[VersionSummary])

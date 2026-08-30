@@ -21,6 +21,7 @@ import pytest
 import sqlalchemy as sa
 from sqlalchemy import event
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -35,7 +36,7 @@ from app.ecology.models import EcologicalParameter, EcologicalParameterResourceM
 from app.jobs.enums import JobStatus, JobType, OutboxStatus
 from app.jobs.models import Job, JobEvent, OutboxEvent
 from app.jobs.service import JobService
-from app.monitoring.enums import RunStatus
+from app.monitoring.enums import RunStatus, ScheduleType
 from app.monitoring.execution import execute_monitoring_run
 from app.monitoring.models import (
     MonitoringOccurrence,
@@ -141,7 +142,7 @@ def _make_plan(session: Session, service: MonitoringService, *, name: str) -> Mo
         PlanCreate(
             name=name,
             boundary=_VALID_BOUNDARY,
-            schedule_type="INTERVAL",
+            schedule_type=ScheduleType.INTERVAL,
             schedule_expression="P1D",
             timezone="UTC",
         )
@@ -172,7 +173,9 @@ def _trigger(session: Session, *, name: str) -> tuple[MonitoringService, Monitor
 
 
 def _outbox_of(session: Session, job_id: UUID) -> OutboxEvent:
-    return session.scalar(sa.select(OutboxEvent).where(OutboxEvent.aggregate_id == job_id))
+    row = session.scalar(sa.select(OutboxEvent).where(OutboxEvent.aggregate_id == job_id))
+    assert row is not None
+    return row
 
 
 class TestJobRunDispatcher:
@@ -318,7 +321,7 @@ class TestExecuteMonitoringRun:
         import app.monitoring.execution as execution_module
 
         def _boom(session: Session, run: MonitoringRun) -> list[str]:
-            raise sa.exc.OperationalError("stmt", {}, Exception("数据库暂不可达"))
+            raise OperationalError("stmt", {}, Exception("数据库暂不可达"))
 
         original_verify = execution_module._verify_snapshot
         monkeypatch.setattr(execution_module, "_verify_snapshot", _boom)
@@ -364,7 +367,7 @@ class TestExecuteMonitoringRun:
         import app.monitoring.execution as execution_module
 
         def _boom(session: Session, run: MonitoringRun) -> list[str]:
-            raise sa.exc.OperationalError("stmt", {}, Exception("数据库暂不可达"))
+            raise OperationalError("stmt", {}, Exception("数据库暂不可达"))
 
         monkeypatch.setattr(execution_module, "_verify_snapshot", _boom)
 
@@ -387,6 +390,32 @@ class TestExecuteMonitoringRun:
             assert job.status is JobStatus.FAILED
             assert job.last_error is not None
             assert job.last_error["code"] == "TRANSIENT_EXHAUSTED"
+
+    def test_soft_timeout_fails_run_and_job_with_stable_diagnostic(
+        self, factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Celery 软时限必须同步收敛 Run/Job，并留下稳定错误码。"""
+        import app.monitoring.execution as execution_module
+
+        def _timeout(session: Session, run: MonitoringRun) -> list[str]:
+            raise execution_module.SoftTimeLimitExceeded()
+
+        monkeypatch.setattr(execution_module, "_verify_snapshot", _timeout)
+        with session_scope(factory) as session:
+            _service, run = _trigger(session, name="软时限")
+            job_id = run.job_id
+            assert job_id is not None
+
+        execute_monitoring_run(str(job_id), factory=factory)
+
+        with session_scope(factory) as session:
+            run_after = session.get(MonitoringRun, run.id)
+            job = session.get(Job, job_id)
+            assert run_after is not None and job is not None
+            assert run_after.status is RunStatus.FAILED
+            assert job.status is JobStatus.FAILED
+            assert job.last_error is not None
+            assert job.last_error["code"] == "TASK_TIMEOUT"
 
     def test_redelivery_after_success_is_noop(self, factory: sessionmaker[Session]) -> None:
         """成功落库后的重复消息：不重复审计、不改变任何状态。"""

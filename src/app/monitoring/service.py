@@ -128,6 +128,16 @@ def _dedupe_preserving_order(ids: Sequence[UUID]) -> list[UUID]:
 
 
 class MonitoringService:
+    def asset_has_snapshot_references(self, asset_id: UUID) -> bool:
+        """资产是否仍被不可变监测输入快照引用；生命周期模块据此禁止物理清理。"""
+        return bool(
+            self._session.scalar(
+                sa.select(sa.func.count())
+                .select_from(MonitoringRunInput)
+                .where(MonitoringRunInput.asset_id == asset_id)
+            )
+        )
+
     def __init__(self, session: Session, dispatcher: RunDispatcher | None = None) -> None:
         self._session = session
         # 默认生产派发器：同事务创建 MONITORING_RUN Job + Outbox 事件；

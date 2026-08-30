@@ -54,7 +54,11 @@ def _sqlite_after_create_without_spatialite(table: Any, bind: Any, **_kw: object
 def factory(monkeypatch: pytest.MonkeyPatch) -> Iterator[sessionmaker[Session]]:
     from geoalchemy2.admin import dialects as ga_dialects
 
-    monkeypatch.setattr(ga_dialects.sqlite, "after_create", _sqlite_after_create_without_spatialite)
+    monkeypatch.setattr(
+        ga_dialects.sqlite,  # pyright: ignore[reportPrivateImportUsage]
+        "after_create",
+        _sqlite_after_create_without_spatialite,
+    )
     engine = sa.create_engine(
         "sqlite+pysqlite:///:memory:",
         future=True,
@@ -92,7 +96,7 @@ class _ExistingCogMinio(_RecordingMinio):
 
 
 def _write_tif(path: Path, *, crs: str | None) -> None:
-    kwargs: dict[str, object] = {"transform": from_origin(114.0, 31.0, 0.004, 0.004)}
+    kwargs: dict[str, Any] = {"transform": from_origin(114.0, 31.0, 0.004, 0.004)}
     if crs is not None:
         kwargs["crs"] = crs
     with rasterio.open(

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 from uuid import uuid4
 
 import pytest
@@ -18,6 +18,8 @@ from app.processing.blob import resolve_input_object
 from app.processing.common import IngestionContext
 from app.processing.errors import DeterministicError
 from app.processing.raster_ingestion import RasterIngestion
+from app.settings import Settings
+from app.uploads.minio import MinioAdapter
 
 
 class _FakeSession:
@@ -111,8 +113,8 @@ def test_raster_validate_uses_canonical_blob_after_source_deleted(tmp_path: Path
     version = _blob_version(canonical, 4)
     minio = _RecordingMinio({canonical: {"size": 4}})
     ingestion = RasterIngestion(
-        settings=object(),
-        minio=minio,
+        settings=cast(Settings, object()),
+        minio=cast(MinioAdapter, minio),
         engine=_fake_factory(version),  # type: ignore[arg-type]
     )
     ingestion._step_validate(ctx)
@@ -126,8 +128,8 @@ def test_raster_validate_falls_back_to_source_when_canonical_missing(tmp_path: P
     version = _blob_version(canonical, 4)
     minio = _RecordingMinio({"uploads/s1/src.tif": {"size": 4}})
     ingestion = RasterIngestion(
-        settings=object(),
-        minio=minio,
+        settings=cast(Settings, object()),
+        minio=cast(MinioAdapter, minio),
         engine=_fake_factory(version),  # type: ignore[arg-type]
     )
     ingestion._step_validate(ctx)
@@ -139,8 +141,8 @@ def test_raster_validate_fails_when_both_objects_missing(tmp_path: Path) -> None
     canonical = "original/ab/cd/" + "a" * 64
     version = _blob_version(canonical, 4)
     ingestion = RasterIngestion(
-        settings=object(),
-        minio=_RecordingMinio({}),
+        settings=cast(Settings, object()),
+        minio=cast(MinioAdapter, _RecordingMinio({})),
         engine=_fake_factory(version),  # type: ignore[arg-type]
     )
     with pytest.raises(DeterministicError) as exc_info:

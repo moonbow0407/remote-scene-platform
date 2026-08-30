@@ -71,6 +71,7 @@ class Job(Base, TimestampMixin):
     __table_args__ = (
         # 恢复器扫描：RUNNING 且租约过期
         sa.Index("ix_job_status_lease_expires", "status", "lease_expires_at"),
+        sa.Index("ix_job_status_finished", "status", "finished_at"),
     )
 
 

@@ -122,7 +122,7 @@ services:
       - -Q
       - geo
       - --concurrency
-      - "2"
+      - ${APP_WORKER_CONCURRENCY:-2}
       - --loglevel
       - INFO
     depends_on:
@@ -158,6 +158,17 @@ services:
       db:
         condition: service_healthy
 
+  # 资产恢复期到期后，先在数据库事务中解除版本/blob 引用，再幂等清理 MinIO 对象。
+  cleanup:
+    image: remote-scene/api:latest
+    env_file: .env
+    command: [".venv/bin/python", "-m", "app.cleanup.main"]
+    depends_on:
+      db:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+
   nginx:
     image: nginx:1.27-alpine
     ports:
@@ -178,6 +189,12 @@ services:
   grafana:
     profiles: ["observability"]
     image: grafana/grafana:latest
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
     ports:
       - "127.0.0.1:3000:3000"
 

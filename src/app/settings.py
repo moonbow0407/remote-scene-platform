@@ -65,6 +65,15 @@ class Settings(BaseSettings):
     worker_tmp_dir: str = "/data/tmp"
     # 临时空间预检：低于源文件预计占用的该倍数时任务早期失败
     worker_tmp_min_ratio: float = 2.0
+    worker_concurrency: int = 2
+    # 软时限用于落明确诊断，硬时限兜底杀死失控子进程；后者必须留出清理窗口。
+    worker_task_soft_timeout_seconds: int = 21600
+    worker_task_hard_timeout_seconds: int = 22200
+
+    # 资产删除后 7 天内可恢复；cleanup 进程分批清理过期资产与 MinIO 对象。
+    asset_retention_days: int = 7
+    cleanup_poll_seconds: float = 5.0
+    cleanup_batch_size: int = 20
 
     # Job 执行租约：Worker 认领时取得，运行期间由心跳续约；租约过期由独立恢复器
     # 回收重投（不依赖 Broker 重投消息恰好到达）
@@ -102,6 +111,26 @@ class Settings(BaseSettings):
             )
         return value
 
+    @field_validator(
+        "worker_concurrency",
+        "worker_task_soft_timeout_seconds",
+        "worker_task_hard_timeout_seconds",
+        "asset_retention_days",
+        "cleanup_batch_size",
+    )
+    @classmethod
+    def _validate_positive_operational_ints(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("Worker/生命周期配置必须为正整数")
+        return value
+
+    @field_validator("worker_tmp_min_ratio", "cleanup_poll_seconds")
+    @classmethod
+    def _validate_positive_operational_float(cls, value: float) -> float:
+        if value <= 0:
+            raise ValueError("临时空间倍率与清理轮询间隔必须为正数")
+        return value
+
     @model_validator(mode="after")
     def _validate_lease_ttl_beats_heartbeat(self) -> Self:
         # TTL 必须≥若干个心跳周期，否则一次心跳抖动就会导致任务被误回收
@@ -110,6 +139,15 @@ class Settings(BaseSettings):
                 f"APP_JOB_LEASE_TTL_SECONDS（{self.job_lease_ttl_seconds}s）必须大于 "
                 f"APP_JOB_HEARTBEAT_INTERVAL_SECONDS（{self.job_heartbeat_interval_seconds}s），"
                 "否则心跳抖动会造成任务被误回收"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_task_timeouts(self) -> Self:
+        if self.worker_task_hard_timeout_seconds <= self.worker_task_soft_timeout_seconds:
+            raise ValueError(
+                "APP_WORKER_TASK_HARD_TIMEOUT_SECONDS 必须大于 "
+                "APP_WORKER_TASK_SOFT_TIMEOUT_SECONDS，以便软超时落库和清理临时目录"
             )
         return self
 

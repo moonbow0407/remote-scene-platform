@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
+from billiard.exceptions import SoftTimeLimitExceeded
 from celery import Task
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -28,7 +29,12 @@ from app.jobs.heartbeat import LeaseHeartbeat
 from app.jobs.service import JobService
 from app.processing.attachment_ingestion import AttachmentIngestion
 from app.processing.common import IngestionContext
-from app.processing.errors import DeterministicError, NeedsInputError, TransientError
+from app.processing.errors import (
+    DeterministicError,
+    NeedsInputError,
+    ProcessingCancelledError,
+    TransientError,
+)
 from app.processing.raster_ingestion import RasterIngestion
 from app.processing.vector_ingestion import VectorIngestion
 from app.settings import get_settings
@@ -59,7 +65,7 @@ _MISSING_FIELDS_BY_REASON: dict[str, list[str]] = {
 }
 
 
-def _execute_ingestion(self: Task, job_id: str, runner: Any, label: str) -> None:
+def _execute_ingestion(self: Any, job_id: str, runner: Any, label: str) -> None:
     settings = get_settings()
     factory = _get_factory()
     job_uuid = UUID(job_id)
@@ -126,6 +132,27 @@ def _execute_ingestion(self: Task, job_id: str, runner: Any, label: str) -> None
                 },
             )
         logger.info("任务进入 NEEDS_INPUT", extra={"job_id": job_id, "reason": exc.reason})
+        return
+    except ProcessingCancelledError:
+        # 检查点已把 Job 推进到 CANCELLED；这里只收敛版本状态。
+        with session_scope(factory) as session:
+            AssetService(session).mark_version_cancelled(ctx.version_id)
+        logger.info("任务已在处理步骤检查点取消", extra={"job_id": job_id})
+        return
+    except SoftTimeLimitExceeded:
+        detail = f"任务超过软时限 {settings.worker_task_soft_timeout_seconds} 秒，已停止处理"
+        with session_scope(factory) as session:
+            jobs = JobService(session)
+            job = jobs.get_required(job_uuid)
+            jobs.transition(
+                job,
+                JobStatus.FAILED,
+                event_type="JOB_TIMEOUT",
+                detail={"code": "TASK_TIMEOUT", "detail": detail, "transient": False},
+            )
+            job.last_error = {"code": "TASK_TIMEOUT", "detail": detail, "transient": False}
+            AssetService(session).mark_version_cancelled(ctx.version_id, reason="TASK_TIMEOUT")
+        logger.error("任务达到软时限，已落失败诊断", extra={"job_id": job_id})
         return
     except DeterministicError as exc:
         with session_scope(factory) as session:

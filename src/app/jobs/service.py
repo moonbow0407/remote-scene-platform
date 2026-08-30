@@ -93,6 +93,70 @@ class JobService:
             raise not_found("任务", job_id)
         return job
 
+    def request_cancel(self, job: Job) -> Job:
+        """请求取消任务；未开始的任务立即终止，运行中任务由步骤检查点收敛。"""
+        if job.status in (
+            JobStatus.PENDING,
+            JobStatus.QUEUED,
+            JobStatus.RETRYING,
+            JobStatus.NEEDS_INPUT,
+        ):
+            return self.transition(job, JobStatus.CANCELLED, event_type="JOB_CANCELLED")
+        if job.status is JobStatus.RUNNING:
+            return self.transition(
+                job, JobStatus.CANCEL_REQUESTED, event_type="JOB_CANCEL_REQUESTED"
+            )
+        return job
+
+    def cancellation_checkpoint(self, job_id: UUID) -> bool:
+        """Worker 步骤边界检查取消标志；返回 True 时调用方必须立即停止。"""
+        job = self._session.scalar(sa.select(Job).where(Job.id == job_id).with_for_update())
+        if job is None:
+            return True
+        if job.status is JobStatus.CANCEL_REQUESTED:
+            self.transition(job, JobStatus.CANCELLED, event_type="JOB_CANCELLED_AT_CHECKPOINT")
+            return True
+        return job.status is JobStatus.CANCELLED
+
+    def request_cancel_for_versions(self, version_ids: list[UUID]) -> list[UUID]:
+        """资产软删除时取消关联的非终态入库任务。"""
+        if not version_ids:
+            return []
+        jobs = list(
+            self._session.scalars(
+                sa.select(Job).where(
+                    Job.asset_version_id.in_(version_ids),
+                    Job.status.in_(
+                        (
+                            JobStatus.PENDING,
+                            JobStatus.QUEUED,
+                            JobStatus.RUNNING,
+                            JobStatus.RETRYING,
+                            JobStatus.NEEDS_INPUT,
+                            JobStatus.CANCEL_REQUESTED,
+                        )
+                    ),
+                )
+            )
+        )
+        for job in jobs:
+            self.request_cancel(job)
+        return [job.id for job in jobs]
+
+    def has_active_for_versions(self, version_ids: list[UUID]) -> bool:
+        if not version_ids:
+            return False
+        return bool(
+            self._session.scalar(
+                sa.select(sa.func.count())
+                .select_from(Job)
+                .where(
+                    Job.asset_version_id.in_(version_ids),
+                    Job.status.in_((JobStatus.RUNNING, JobStatus.CANCEL_REQUESTED)),
+                )
+            )
+        )
+
     def transition(
         self,
         job: Job,

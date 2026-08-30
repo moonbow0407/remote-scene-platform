@@ -305,6 +305,26 @@ def test_batch_mapping_dedup_and_empty(factory: sessionmaker[Session]) -> None:
         assert again.existing[0].id == batch.created[0].id
 
 
+def test_mapping_update_atomically_replaces_foreign_keys(
+    factory: sessionmaker[Session],
+) -> None:
+    with session_scope(factory) as session:
+        catalogs = CatalogService(session)
+        ecology = EcologyService(session)
+        first = catalogs.create_resource(ResourceCatalogCreate(code="RU1", name="资源一"))
+        second = catalogs.create_resource(ResourceCatalogCreate(code="RU2", name="资源二"))
+        param = ecology.create_parameter(EcologicalParameterCreate(code="PU", name="参数"))
+        mapping = ecology.create_mapping(
+            MappingCreate(ecological_parameter_id=param.id, resource_catalog_id=first.id)
+        )
+        updated = ecology.update_mapping(
+            mapping.id,
+            MappingCreate(ecological_parameter_id=param.id, resource_catalog_id=second.id),
+        )
+        assert updated.id == mapping.id
+        assert updated.resource_catalog_id == second.id
+
+
 def test_delete_resource_with_mapping_forbidden(factory: sessionmaker[Session]) -> None:
     with session_scope(factory) as session:
         catalogs = CatalogService(session)

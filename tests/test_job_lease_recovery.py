@@ -89,6 +89,7 @@ def test_claim_grants_lease_and_increments_attempt(factory: sessionmaker[Session
         assert claim.job.status is JobStatus.RUNNING
         assert claim.job.attempt == 1
         assert claim.job.heartbeat_at is not None
+        assert claim.job.lease_expires_at is not None
         assert _aware(claim.job.lease_expires_at) > now_utc() + timedelta(seconds=590)
 
 

@@ -9,7 +9,9 @@ import sqlalchemy as sa
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
 
+from app.assets.service import AssetService
 from app.db import session_scope
+from app.jobs.enums import JobStatus
 from app.jobs.models import JobEvent
 from app.jobs.service import JobService
 
@@ -59,3 +61,15 @@ def get_job(
         ],
         "_poll_hint": f"GET {settings.public_base_url}/api/v1/jobs/{job.id}",
     }
+
+
+@router.post("/{job_id}/cancel")
+def cancel_job(
+    job_id: UUID, session: Annotated[Session, Depends(_get_session)]
+) -> dict[str, str]:
+    """请求取消；排队任务立即取消，运行中任务在下一个处理步骤检查点停止。"""
+    jobs = JobService(session)
+    job = jobs.request_cancel(jobs.get_required(job_id))
+    if job.asset_version_id is not None and job.status is JobStatus.CANCELLED:
+        AssetService(session).mark_version_cancelled(job.asset_version_id)
+    return {"job_id": str(job.id), "status": job.status.value}

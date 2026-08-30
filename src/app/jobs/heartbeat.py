@@ -11,10 +11,11 @@
 import logging
 import threading
 from datetime import timedelta
-from typing import Any
+from typing import Any, cast
 from uuid import UUID
 
 import sqlalchemy as sa
+from sqlalchemy.engine import CursorResult
 
 from app.context import now_utc
 from app.db import session_scope
@@ -32,7 +33,7 @@ class LeaseHeartbeat:
         factory: Any,
         job_id: UUID,
         lease_token: UUID,
-        interval_seconds: int,
+        interval_seconds: float,
         ttl_seconds: int,
     ) -> None:
         self._factory = factory
@@ -87,4 +88,4 @@ class LeaseHeartbeat:
                     lease_expires_at=now + timedelta(seconds=self._ttl_seconds),
                 )
             )
-        return bool(result.rowcount)
+        return bool(cast(CursorResult[Any], result).rowcount)

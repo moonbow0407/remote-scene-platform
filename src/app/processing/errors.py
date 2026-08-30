@@ -27,3 +27,7 @@ class NeedsInputError(Exception):
         super().__init__(detail)
         self.reason = reason
         self.detail = detail
+
+
+class ProcessingCancelledError(Exception):
+    """任务在显式取消检查点停止；Job 已由检查点推进到 CANCELLED。"""

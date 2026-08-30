@@ -10,9 +10,11 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from http import HTTPStatus
+from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
+from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -88,7 +90,14 @@ def create_app() -> FastAPI:
     settings = get_settings()
     configure_logging(settings.log_level)
 
-    app = FastAPI(title="remote-scene-platform", version="0.1.0", lifespan=_lifespan)
+    app = FastAPI(
+        title="remote-scene-platform",
+        version="0.1.0",
+        lifespan=_lifespan,
+        openapi_url=f"{API_V1_PREFIX}/openapi.json",
+        docs_url=f"{API_V1_PREFIX}/docs",
+        redoc_url=None,
+    )
     app.add_middleware(TraceAccessMiddleware)
     app.include_router(ops_router, prefix=API_V1_PREFIX)
     app.include_router(auth_router, prefix=API_V1_PREFIX)
@@ -101,6 +110,44 @@ def create_app() -> FastAPI:
     app.include_router(catalogs_router, prefix=API_V1_PREFIX)
     app.include_router(ecology_router, prefix=API_V1_PREFIX)
     app.include_router(monitoring_router, prefix=API_V1_PREFIX)
+
+    def custom_openapi() -> dict[str, Any]:
+        """让 OpenAPI 与实际 RFC 9457 错误媒体类型一致，避免前端按框架默认误接。"""
+        if app.openapi_schema is not None:
+            return app.openapi_schema
+        schema = get_openapi(title=app.title, version=app.version, routes=app.routes)
+        components = schema.setdefault("components", {}).setdefault("schemas", {})
+        components["ProblemDetails"] = {
+            "type": "object",
+            "required": ["type", "title", "status", "code"],
+            "properties": {
+                "type": {"type": "string"},
+                "title": {"type": "string"},
+                "status": {"type": "integer"},
+                "code": {"type": "string"},
+                "detail": {"type": "string"},
+                "trace_id": {"type": "string"},
+                "errors": {"type": "array", "items": {"type": "object"}},
+            },
+        }
+        problem_content = {
+            "application/problem+json": {
+                "schema": {"$ref": "#/components/schemas/ProblemDetails"}
+            }
+        }
+        for path_item in schema.get("paths", {}).values():
+            for method, operation in path_item.items():
+                if method not in {"get", "post", "put", "patch", "delete"}:
+                    continue
+                responses = operation.setdefault("responses", {})
+                responses["422"] = {"description": "请求或领域校验失败", "content": problem_content}
+                responses.setdefault(
+                    "500", {"description": "未处理的服务端错误", "content": problem_content}
+                )
+        app.openapi_schema = schema
+        return schema
+
+    app.openapi = custom_openapi  # type: ignore[method-assign]
 
     @app.exception_handler(ProblemError)
     async def problem_error_handler(request: Request, exc: ProblemError) -> JSONResponse:

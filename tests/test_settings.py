@@ -29,6 +29,12 @@ def test_local_allows_empty_jwt_secret() -> None:
     assert settings.jwt_secret == ""
 
 
+def test_worker_hard_timeout_must_exceed_soft_timeout() -> None:
+    with pytest.raises(ValidationError) as exc_info:
+        Settings(worker_task_soft_timeout_seconds=60, worker_task_hard_timeout_seconds=60)
+    assert "APP_WORKER_TASK_HARD_TIMEOUT_SECONDS" in str(exc_info.value)
+
+
 @pytest.mark.parametrize("ttl", [0, -1])
 def test_non_positive_jwt_ttl_fails_fast(ttl: int) -> None:
     with pytest.raises(ValidationError):

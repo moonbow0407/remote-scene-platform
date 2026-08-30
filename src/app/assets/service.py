@@ -134,8 +134,11 @@ class AssetService:
             catalogs.get_satellite_required(satellite_id)
         return resource_catalog_id, satellite_id, sensor_id
 
-    def get_asset(self, asset_id: UUID) -> DataAsset | None:
-        return self._session.get(DataAsset, asset_id)
+    def get_asset(self, asset_id: UUID, *, include_deleted: bool = False) -> DataAsset | None:
+        asset = self._session.get(DataAsset, asset_id)
+        if asset is not None and asset.deleted_at is not None and not include_deleted:
+            return None
+        return asset
 
     def get_asset_required(self, asset_id: UUID) -> DataAsset:
         asset = self.get_asset(asset_id)
@@ -211,6 +214,22 @@ class AssetService:
         if diagnostics is not None:
             version.diagnostics = diagnostics
         return version
+
+    def mark_version_cancelled(self, version_id: UUID, *, reason: str = "JOB_CANCELLED") -> None:
+        """把被取消任务关联的非终态版本收敛为 FAILED，避免恢复后长期伪运行。"""
+        version = self.get_version_by_id(version_id)
+        if version is None or version.status in (
+            AssetVersionStatus.READY,
+            AssetVersionStatus.FAILED,
+            AssetVersionStatus.DELETED,
+        ):
+            return
+        if is_version_transition_allowed(version.status, AssetVersionStatus.FAILED):
+            self.set_version_status(
+                version,
+                AssetVersionStatus.FAILED,
+                diagnostics={"reason": reason, "detail": "处理任务已取消"},
+            )
 
     # ---- 内容寻址对象 ----
 
@@ -408,7 +427,8 @@ class AssetService:
             count_stmt = count_stmt.outerjoin(
                 RasterAssetVersion, RasterAssetVersion.asset_version_id == AssetVersion.id
             ).outerjoin(VectorAssetVersion, VectorAssetVersion.asset_version_id == AssetVersion.id)
-        conditions: list[sa.ColumnElement[bool]] = []
+        # 软删除资产立即从所有普通检索消失；恢复/清理使用专用生命周期用例。
+        conditions: list[sa.ColumnElement[bool]] = [DataAsset.deleted_at.is_(None)]
         if geometry_wkt is not None:
             geom = WKTElement(geometry_wkt, srid=4326)
             conditions.append(

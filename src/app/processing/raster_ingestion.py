@@ -29,6 +29,7 @@ from app.jobs.service import JobService
 from app.processing.blob import ensure_source_local, hash_dedup_original, resolve_input_object
 from app.processing.common import (
     IngestionContext,
+    cancellation_checkpoint,
     cleanup_tmp_dir,
     is_complete_local_file,
     preflight_tmp,
@@ -91,12 +92,19 @@ class RasterIngestion:
         cleanup_tmp_dir(ctx.tmp_dir)
         try:
             preflight_tmp(ctx, self._settings)
+            cancellation_checkpoint(ctx, self._engine)
             self._step_validate(ctx)
+            cancellation_checkpoint(ctx, self._engine)
             self._step_hash_dedup(ctx)
+            cancellation_checkpoint(ctx, self._engine)
             self._step_inspect(ctx)
+            cancellation_checkpoint(ctx, self._engine)
             self._step_create_cog(ctx)
+            cancellation_checkpoint(ctx, self._engine)
             self._step_thumbnail(ctx)
+            cancellation_checkpoint(ctx, self._engine)
             self._step_footprint(ctx)
+            cancellation_checkpoint(ctx, self._engine)
             self._step_finalize(ctx)
         finally:
             cleanup_tmp_dir(ctx.tmp_dir)

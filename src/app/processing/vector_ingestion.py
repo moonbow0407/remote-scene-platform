@@ -20,7 +20,12 @@ from app.ids import new_uuid7
 from app.jobs.enums import JobStatus
 from app.jobs.service import JobService
 from app.processing.blob import ensure_source_local, hash_dedup_original, resolve_input_object
-from app.processing.common import IngestionContext, cleanup_tmp_dir, preflight_tmp
+from app.processing.common import (
+    IngestionContext,
+    cancellation_checkpoint,
+    cleanup_tmp_dir,
+    preflight_tmp,
+)
 from app.processing.detect import DetectedKind, detect_file, sniff_head
 from app.processing.errors import DeterministicError
 from app.processing.vector_read import VectorLayer, read_vector_layer, shapely_to_wkt
@@ -48,14 +53,18 @@ class VectorIngestion:
         cleanup_tmp_dir(ctx.tmp_dir)
         try:
             preflight_tmp(ctx, self._settings)
+            cancellation_checkpoint(ctx, self._engine)
             kind = self._step_validate(ctx)
+            cancellation_checkpoint(ctx, self._engine)
             hash_dedup_original(
                 minio=self._minio,
                 engine=self._engine,
                 ctx=ctx,
                 content_type=_CONTENT_TYPES[kind],
             )
+            cancellation_checkpoint(ctx, self._engine)
             self._step_import(ctx, kind)
+            cancellation_checkpoint(ctx, self._engine)
             self._step_finalize(ctx)
         finally:
             cleanup_tmp_dir(ctx.tmp_dir)

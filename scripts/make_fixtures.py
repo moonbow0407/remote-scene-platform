@@ -134,8 +134,8 @@ def make_polygon_shapefile_zip() -> None:
 
     base = FIXTURES / "polygons_shp"
     w = shapefile.Writer(str(base), shapeType=shapefile.POLYGON)
-    w.field("name", "C", size=40)
-    w.field("value", "N", size=10, decimal=0)
+    w.field("name", "C", size=40)  # pyright: ignore[reportArgumentType]
+    w.field("value", "N", size=10, decimal=0)  # pyright: ignore[reportArgumentType]
     for i in range(20):
         x0 = 114.0 + (i % 5) * 0.1
         y0 = 30.0 + (i // 5) * 0.1
@@ -146,7 +146,7 @@ def make_polygon_shapefile_zip() -> None:
             [x0, y0 + 0.08],
             [x0, y0],
         ]
-        w.poly([ring])
+        w.poly([ring])  # pyright: ignore[reportArgumentType]
         w.record(f"poly-{i:02d}", i)
     with open(FIXTURES / "polygons_shp.prj", "w", encoding="ascii") as prj:
         prj.write(

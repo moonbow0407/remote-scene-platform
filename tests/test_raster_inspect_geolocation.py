@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from uuid import UUID, uuid4
 
 import pytest
@@ -29,6 +29,8 @@ from app.db import Base, session_scope
 from app.processing.common import IngestionContext
 from app.processing.errors import NeedsInputError
 from app.processing.raster_ingestion import RasterIngestion
+from app.settings import Settings
+from app.uploads.minio import MinioAdapter
 
 
 @compiles(JSONB, "sqlite")
@@ -65,7 +67,11 @@ def _sqlite_after_create_without_spatialite(table: Any, bind: Any, **_kw: object
 def factory(monkeypatch: pytest.MonkeyPatch) -> Iterator[sessionmaker[Session]]:
     from geoalchemy2.admin import dialects as ga_dialects
 
-    monkeypatch.setattr(ga_dialects.sqlite, "after_create", _sqlite_after_create_without_spatialite)
+    monkeypatch.setattr(
+        ga_dialects.sqlite,  # pyright: ignore[reportPrivateImportUsage]
+        "after_create",
+        _sqlite_after_create_without_spatialite,
+    )
     engine = sa.create_engine(
         "sqlite+pysqlite:///:memory:",
         future=True,
@@ -127,7 +133,7 @@ def _write_tif(path: Path, *, crs: str | None, transform: object | None) -> None
     import numpy as np
 
     data = np.zeros((1, 8, 8), dtype="uint8")
-    kwargs: dict[str, object] = {}
+    kwargs: dict[str, Any] = {}
     if crs is not None:
         kwargs["crs"] = crs
     if transform is not None:
@@ -150,8 +156,8 @@ def test_inspect_blocks_without_geotransform_even_with_user_crs(
     ctx = _make_ctx(version_id, source, tmp_path / "job-a")
 
     ingestion = RasterIngestion(
-        settings=object(),
-        minio=_ForbiddenMinio(),
+        settings=cast(Settings, object()),
+        minio=cast(MinioAdapter, _ForbiddenMinio()),
         engine=factory,  # type: ignore[arg-type]
     )
     with pytest.raises(NeedsInputError) as exc_info:
@@ -169,8 +175,8 @@ def test_inspect_requests_crs_for_georeferenced_file_without_crs(
     version_id = _prepare_version(factory, source)
     ctx = _make_ctx(version_id, source, tmp_path / "job-a")
     ingestion = RasterIngestion(
-        settings=object(),
-        minio=_ForbiddenMinio(),
+        settings=cast(Settings, object()),
+        minio=cast(MinioAdapter, _ForbiddenMinio()),
         engine=factory,  # type: ignore[arg-type]
     )
     with pytest.raises(NeedsInputError) as exc_info:
@@ -189,8 +195,8 @@ def test_inspect_recovers_with_user_crs_from_x3_style_source(
     version_id = _prepare_version(factory, source)
     ctx = _make_ctx(version_id, source, tmp_path / "job-a")
     ingestion = RasterIngestion(
-        settings=object(),
-        minio=_ForbiddenMinio(),
+        settings=cast(Settings, object()),
+        minio=cast(MinioAdapter, _ForbiddenMinio()),
         engine=factory,  # type: ignore[arg-type]
     )
     with pytest.raises(NeedsInputError):
@@ -206,6 +212,7 @@ def test_inspect_recovers_with_user_crs_from_x3_style_source(
         assert ext is not None
         assert version is not None
         assert ext.crs == "EPSG:4326"
+        assert ext.resolution_x is not None
         assert float(ext.resolution_x) == pytest.approx(0.004)
         assert version.status is AssetVersionStatus.PROCESSING
 
@@ -220,8 +227,8 @@ def test_inspect_passes_for_georeferenced_source_with_crs(
     version_id = _prepare_version(factory, source)
     ctx = _make_ctx(version_id, source, tmp_path / "job-a")
     ingestion = RasterIngestion(
-        settings=object(),
-        minio=_ForbiddenMinio(),
+        settings=cast(Settings, object()),
+        minio=cast(MinioAdapter, _ForbiddenMinio()),
         engine=factory,  # type: ignore[arg-type]
     )
     ingestion._step_inspect(ctx)

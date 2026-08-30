@@ -19,7 +19,14 @@ from sqlalchemy import ForeignKey, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.assets.enums import ArtifactKind, AssetSource, AssetType, AssetVersionStatus
+from app.assets.enums import (
+    ArtifactKind,
+    AssetSource,
+    AssetType,
+    AssetVersionStatus,
+    ObjectCleanupKind,
+    ObjectCleanupStatus,
+)
 from app.db import Base, TimestampMixin
 
 
@@ -75,9 +82,27 @@ class DataAsset(Base, TimestampMixin):
     created_by: Mapped[Any | None] = mapped_column(
         sa.Uuid, nullable=True, comment="鉴权预留，首版为 NULL"
     )
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True, comment="软删除时间；非空即从普通查询隐藏"
+    )
+    purge_after: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True, comment="恢复期结束时间；到期后允许异步物理清理"
+    )
+    deleted_by: Mapped[Any | None] = mapped_column(
+        sa.Uuid, nullable=True, comment="执行软删除的操作者；匿名系统操作者为 NULL"
+    )
+    purge_attempts: Mapped[int] = mapped_column(sa.Integer, nullable=False, default=0)
+    purge_next_attempt_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True, comment="物理清理失败后的下次重试时间"
+    )
+    purge_last_error: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
 
     versions: Mapped[list["AssetVersion"]] = relationship(
         back_populates="asset", foreign_keys="AssetVersion.asset_id"
+    )
+
+    __table_args__ = (
+        sa.Index("ix_data_asset_purge_due", "deleted_at", "purge_after", "purge_next_attempt_at"),
     )
 
 
@@ -124,6 +149,7 @@ class AssetVersion(Base, TimestampMixin):
 
     __table_args__ = (
         UniqueConstraint("asset_id", "version_number", name="uq_asset_version_number"),
+        sa.Index("ix_asset_version_search", "status", "acquired_at", "created_at"),
     )
 
 
@@ -137,6 +163,42 @@ class ObjectBlob(Base, TimestampMixin):
     object_key: Mapped[str] = mapped_column(sa.String(1024), nullable=False)
     size_bytes: Mapped[int] = mapped_column(sa.BigInteger, nullable=False)
     reference_count: Mapped[int] = mapped_column(sa.Integer, nullable=False, default=0)
+
+
+class ObjectCleanupTask(Base, TimestampMixin):
+    """MinIO 对象删除任务。
+
+    数据库先持久化任务，再由独立 cleanup 进程删除对象并回写结果。对象删除幂等，
+    因此进程在 MinIO 成功后、数据库提交前崩溃也可以安全重试。
+    """
+
+    __tablename__ = "object_cleanup_task"
+
+    id: Mapped[Any] = mapped_column(sa.Uuid, primary_key=True)
+    kind: Mapped[ObjectCleanupKind] = mapped_column(
+        sa.Enum(ObjectCleanupKind, native_enum=False, length=16), nullable=False
+    )
+    object_key: Mapped[str] = mapped_column(sa.String(1024), nullable=False, unique=True)
+    blob_id: Mapped[Any | None] = mapped_column(
+        sa.Uuid,
+        nullable=True,
+        comment="BLOB 清理目标；故意不建外键，便于对象删除成功后移除 blob 行",
+    )
+    status: Mapped[ObjectCleanupStatus] = mapped_column(
+        sa.Enum(ObjectCleanupStatus, native_enum=False, length=16),
+        nullable=False,
+        default=ObjectCleanupStatus.PENDING,
+    )
+    attempts: Mapped[int] = mapped_column(sa.Integer, nullable=False, default=0)
+    claimed_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
+    next_attempt_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True
+    )
+    last_error: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
+
+    __table_args__ = (
+        sa.Index("ix_object_cleanup_due", "status", "next_attempt_at", "created_at"),
+    )
 
 
 class RasterAssetVersion(Base):

@@ -3,7 +3,7 @@
 边界：
 - 创建映射前通过 CatalogService 校验资源目录存在（模块间经公开 Service 协作）；
 - 批量创建同事务、自动去重、已存在关系幂等返回；
-- 映射无可变属性，不提供更新接口。
+- 更新映射是对两端 UUID 外键的原子替换，不以名称/code 作为关系键。
 """
 
 from __future__ import annotations
@@ -291,6 +291,38 @@ class EcologyService:
         if result.created:
             return self.get_mapping_required(result.created[0].id)
         return self.get_mapping_required(result.existing[0].id)
+
+    def update_mapping(
+        self, mapping_id: UUID, body: MappingCreate
+    ) -> EcologicalParameterResourceMapping:
+        """原子替换映射两端；目标组合已由其他行占用时返回稳定冲突。"""
+        row = self.get_mapping_required(mapping_id)
+        self.get_parameter_required(body.ecological_parameter_id)
+        CatalogService(self._session).get_resource_required(body.resource_catalog_id)
+        duplicate = self._session.scalar(
+            sa.select(EcologicalParameterResourceMapping.id).where(
+                EcologicalParameterResourceMapping.id != mapping_id,
+                EcologicalParameterResourceMapping.ecological_parameter_id
+                == body.ecological_parameter_id,
+                EcologicalParameterResourceMapping.resource_catalog_id
+                == body.resource_catalog_id,
+            )
+        )
+        if duplicate is not None:
+            raise conflict(
+                code="ECOLOGY_MAPPING_CONFLICT",
+                detail="目标生态参数与资源目录的映射已存在",
+            )
+        row.ecological_parameter_id = body.ecological_parameter_id
+        row.resource_catalog_id = body.resource_catalog_id
+        try:
+            self._session.flush()
+        except IntegrityError as exc:
+            raise conflict(
+                code="ECOLOGY_MAPPING_CONFLICT",
+                detail="目标生态参数与资源目录的映射已存在",
+            ) from exc
+        return row
 
     def create_mappings_batch(self, body: MappingBatchCreate) -> MappingBatchResponse:
         # 空输入安全：直接返回空结果

@@ -53,7 +53,7 @@ def _write_shapefile_zip(path: Path) -> None:
     base = path / "pts"
     base.mkdir(parents=True, exist_ok=True)
     writer = shapefile.Writer(str(base / "pts"), shapeType=shapefile.POINT)
-    writer.field("svy_date", "D", size=8)
+    writer.field("svy_date", "D", size=8)  # pyright: ignore[reportArgumentType]
     writer.point(114.0, 30.0)
     writer.record(date(2026, 8, 29))
     writer.close()

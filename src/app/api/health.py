@@ -10,16 +10,20 @@ from fastapi import APIRouter, Request, Response
 from fastapi.responses import JSONResponse
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
+from app.api.operational_metrics import refresh_database_metrics, refresh_rabbitmq_metrics
 from app.checks import check_database, check_minio, check_rabbitmq, check_titiler
 from app.errors import ProblemError
+from app.logging import trace_id_var
 from app.settings import get_settings
 
 router = APIRouter(tags=["运维"])
 
 
 @router.get("/metrics")
-async def metrics() -> Response:
+async def metrics(request: Request) -> Response:
     """Prometheus 抓取端点；由内网 Prometheus 直接抓取，不经 Nginx 对外暴露。"""
+    refresh_database_metrics(request.app.state.session_factory)
+    await refresh_rabbitmq_metrics(request.app.state.settings, request.app.state.session_factory)
     return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
@@ -51,6 +55,7 @@ async def readyz(request: Request) -> JSONResponse:
             components[name] = "ok"
 
     if failures:
+        trace_id = trace_id_var.get()
         return JSONResponse(
             status_code=503,
             media_type="application/problem+json",
@@ -61,6 +66,7 @@ async def readyz(request: Request) -> JSONResponse:
                 "code": "DEPENDENCY_UNAVAILABLE",
                 "components": components,
                 "detail": "；".join(failures),
+                **({"trace_id": trace_id} if trace_id else {}),
             },
         )
     return JSONResponse(content={"status": "ok", "components": components})

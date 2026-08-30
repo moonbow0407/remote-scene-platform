@@ -30,7 +30,13 @@ from app.db import Base, session_scope
 from app.jobs.enums import JobStatus, JobType, OutboxStatus
 from app.jobs.models import Job, JobEvent, OutboxEvent
 from app.jobs.service import JobService
-from app.processing.errors import DeterministicError, NeedsInputError, TransientError
+from app.processing.common import IngestionContext, cancellation_checkpoint
+from app.processing.errors import (
+    DeterministicError,
+    NeedsInputError,
+    ProcessingCancelledError,
+    TransientError,
+)
 from app.settings import Settings
 
 
@@ -66,7 +72,11 @@ def _sqlite_after_create_without_spatialite(table: Any, bind: Any, **_kw: object
 def factory(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> Iterator[sessionmaker[Session]]:
     from geoalchemy2.admin import dialects as ga_dialects
 
-    monkeypatch.setattr(ga_dialects.sqlite, "after_create", _sqlite_after_create_without_spatialite)
+    monkeypatch.setattr(
+        ga_dialects.sqlite,  # pyright: ignore[reportPrivateImportUsage]
+        "after_create",
+        _sqlite_after_create_without_spatialite,
+    )
     engine = sa.create_engine(
         "sqlite+pysqlite:///:memory:",
         future=True,
@@ -325,3 +335,27 @@ def test_success_path_completes(factory: sessionmaker[Session]) -> None:
         assert version is not None
         assert job.status is JobStatus.SUCCEEDED
         assert version.status is AssetVersionStatus.READY
+
+
+def test_running_job_stops_at_cancellation_checkpoint(
+    factory: sessionmaker[Session], tmp_path: Any
+) -> None:
+    job_id, version_id = _prepare(factory)
+    with session_scope(factory) as session:
+        jobs = JobService(session)
+        claim = jobs.claim_for_run(job_id)
+        assert claim.acquired
+        jobs.request_cancel(claim.job)
+        assert claim.job.status is JobStatus.CANCEL_REQUESTED
+    ctx = IngestionContext(
+        job_id=job_id,
+        version_id=version_id,
+        source_object_key="uploads/fixture/source",
+        source_size_bytes=16,
+        tmp_dir=tmp_path / str(job_id),
+    )
+    with pytest.raises(ProcessingCancelledError):
+        cancellation_checkpoint(ctx, factory)
+    with session_scope(factory) as session:
+        job = session.get(Job, job_id)
+        assert job is not None and job.status is JobStatus.CANCELLED
