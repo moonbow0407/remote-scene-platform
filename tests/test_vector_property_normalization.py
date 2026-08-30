@@ -67,7 +67,7 @@ def test_shapefile_date_field_is_normalized_to_iso8601(tmp_path: Path) -> None:
     layer = read_vector_layer(
         tmp_path / "pts.zip", DetectedKind.SHAPEFILE_ZIP, user_crs="EPSG:4326"
     )
-    geom, props = layer.features[0]
+    geom, props = next(iter(layer.features))
     assert isinstance(geom, Point)
     assert props["svy_date"] == "2026-08-29"
     assert isinstance(props["svy_date"], str)

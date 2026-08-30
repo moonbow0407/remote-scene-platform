@@ -1,19 +1,25 @@
-"""矢量入库：验证 → 哈希去重 → 读层 → 归一化到 EPSG:4326 → 导入要素 → 完成。
+"""矢量入库：验证 → 哈希去重 → 流式读层 → 逐条投影到 EPSG:4326 → 分批导入 → 完成。
 
 要素写入在同一数据库事务中先删后插，失败回滚后不会留下部分 live 要素。
+读取、投影、schema 统计和 bbox 均为单遍流式；按批 flush/expunge，不构建全量 ORM list。
 """
 
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterator
 from typing import Any
 
 from geoalchemy2 import WKTElement
 from pyproj import CRS, Transformer
+from shapely.geometry.base import BaseGeometry
 from shapely.ops import transform as shp_transform
 
 from app.assets.enums import AssetVersionStatus
-from app.assets.property_schema import infer_property_schema
+from app.assets.property_schema import (
+    accumulate_property_schema,
+    property_schema_from_collected,
+)
 from app.assets.service import AssetService
 from app.db import session_scope
 from app.ids import new_uuid7
@@ -28,7 +34,7 @@ from app.processing.common import (
 )
 from app.processing.detect import DetectedKind, detect_file, sniff_head
 from app.processing.errors import DeterministicError
-from app.processing.vector_read import VectorLayer, read_vector_layer, shapely_to_wkt
+from app.processing.vector_read import iter_vector_features, shapely_to_wkt, unify_geometry_types
 from app.settings import Settings
 from app.uploads.minio import MinioAdapter
 from app.vector_features.models import VectorFeature
@@ -41,6 +47,9 @@ _CONTENT_TYPES = {
     DetectedKind.SHAPEFILE_ZIP: "application/zip",
     DetectedKind.GEOPACKAGE: "application/geopackage+sqlite3",
 }
+
+# 1k–10k 之间：单批 ORM 对象短暂存在，flush 后立即 expunge
+_FEATURE_INSERT_BATCH_SIZE = 5_000
 
 
 class VectorIngestion:
@@ -128,34 +137,28 @@ class VectorIngestion:
                 logger.info("矢量要素已存在，跳过导入", extra={"version_id": str(ctx.version_id)})
                 return
 
-        layer = read_vector_layer(ctx.source_path, kind, user_crs=user_crs)
-        features_4326, bounds = _project_layer(layer)
-        min_x, min_y, max_x, max_y = bounds
-        footprint = (
-            f"POLYGON(({min_x!r} {min_y!r}, {max_x!r} {min_y!r}, "
-            f"{max_x!r} {max_y!r}, {min_x!r} {max_y!r}, {min_x!r} {min_y!r}))"
-        )
-        schema = infer_property_schema([props for _, props in features_4326])
+        source_crs, features = iter_vector_features(ctx.source_path, kind, user_crs=user_crs)
+        projector = _make_projector(source_crs)
         with session_scope(self._engine) as session:
             assets = AssetService(session)
-            features = VectorFeatureService(session)
-            features.replace_version_features(
+            feature_svc = VectorFeatureService(session)
+            feature_svc.delete_version_features(ctx.version_id)
+            imported, bounds, schema, geometry_type = _import_projected_features(
+                feature_svc,
                 ctx.version_id,
-                [
-                    VectorFeature(
-                        id=new_uuid7(),
-                        asset_version_id=ctx.version_id,
-                        geometry=WKTElement(shapely_to_wkt(geom), srid=4326),
-                        properties=props,
-                    )
-                    for geom, props in features_4326
-                ],
+                features,
+                projector,
+            )
+            min_x, min_y, max_x, max_y = bounds
+            footprint = (
+                f"POLYGON(({min_x!r} {min_y!r}, {max_x!r} {min_y!r}, "
+                f"{max_x!r} {max_y!r}, {min_x!r} {max_y!r}, {min_x!r} {min_y!r}))"
             )
             assets.upsert_vector_ext(
                 ctx.version_id,
-                crs=layer.source_crs,
-                geometry_type=layer.geometry_type,
-                feature_count=len(features_4326),
+                crs=source_crs,
+                geometry_type=geometry_type,
+                feature_count=imported,
                 native_format=kind.value,
                 property_schema=schema,
                 footprint=WKTElement(footprint, srid=4326),
@@ -186,24 +189,62 @@ class VectorIngestion:
                 jobs.transition(job, JobStatus.SUCCEEDED, event_type="JOB_SUCCEEDED")
 
 
-def _project_layer(layer: VectorLayer) -> tuple[list[Any], tuple[float, float, float, float]]:
-    assert layer.source_crs is not None
+def _make_projector(source_crs: str) -> Any:
     try:
-        source = CRS.from_user_input(layer.source_crs)
+        source = CRS.from_user_input(source_crs)
     except Exception as exc:
-        raise DeterministicError("INVALID_CRS", f"无法解析 CRS {layer.source_crs!r}") from exc
+        raise DeterministicError("INVALID_CRS", f"无法解析 CRS {source_crs!r}") from exc
+    if source.to_epsg() == 4326:
+        return lambda geom: geom
     transformer = Transformer.from_crs(source, "EPSG:4326", always_xy=True)
-    projected = []
+    return lambda geom: shp_transform(transformer.transform, geom)
+
+
+def _import_projected_features(
+    feature_svc: VectorFeatureService,
+    version_id: Any,
+    features: Iterator[tuple[BaseGeometry, dict[str, Any]]],
+    projector: Any,
+) -> tuple[int, tuple[float, float, float, float], list[dict[str, Any]], str]:
+    schema_acc: dict[str, set[str]] = {}
+    geom_types: set[str] = set()
     min_x = min_y = float("inf")
     max_x = max_y = float("-inf")
-    for geom, props in layer.features:
-        out = geom if source.to_epsg() == 4326 else shp_transform(transformer.transform, geom)
-        if out.is_empty:
-            continue
-        minx, miny, maxx, maxy = out.bounds
-        min_x, min_y = min(min_x, minx), min(min_y, miny)
-        max_x, max_y = max(max_x, maxx), max(max_y, maxy)
-        projected.append((out, props))
-    if not projected:
+    seen = 0
+    imported = 0
+    batch: list[VectorFeature] = []
+    try:
+        for geom, props in features:
+            seen += 1
+            out = projector(geom)
+            if out.is_empty:
+                continue
+            minx, miny, maxx, maxy = out.bounds
+            min_x, min_y = min(min_x, minx), min(min_y, miny)
+            max_x, max_y = max(max_x, maxx), max(max_y, maxy)
+            accumulate_property_schema(schema_acc, props)
+            geom_types.add(out.geom_type)
+            batch.append(
+                VectorFeature(
+                    id=new_uuid7(),
+                    asset_version_id=version_id,
+                    geometry=WKTElement(shapely_to_wkt(out), srid=4326),
+                    properties=props,
+                )
+            )
+            imported += 1
+            if len(batch) >= _FEATURE_INSERT_BATCH_SIZE:
+                feature_svc.insert_feature_batch(batch)
+                batch = []
+        if batch:
+            feature_svc.insert_feature_batch(batch)
+    finally:
+        close = getattr(features, "close", None)
+        if close is not None:
+            close()
+    if imported == 0:
+        if seen == 0:
+            raise DeterministicError("NO_FEATURES", "矢量文件不包含可导入要素")
         raise DeterministicError("NO_FEATURES", "投影后没有有效要素")
-    return projected, (min_x, min_y, max_x, max_y)
+    schema = property_schema_from_collected(schema_acc)
+    return imported, (min_x, min_y, max_x, max_y), schema, unify_geometry_types(geom_types)

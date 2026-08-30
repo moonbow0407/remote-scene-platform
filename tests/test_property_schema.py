@@ -5,8 +5,10 @@ import pytest
 from app.assets.enums import AssetType
 from app.assets.property_schema import (
     DEFAULT_PROPERTY_SCHEMAS,
+    accumulate_property_schema,
     infer_property_schema,
     json_value_type,
+    property_schema_from_collected,
     validate_properties,
 )
 from app.errors import ProblemError
@@ -42,6 +44,11 @@ def test_infer_property_schema_collects_union_types() -> None:
     assert by_name["value"] == ["integer"]
     assert by_name["note"] == ["null", "string"]
     assert json_value_type(True) == "boolean"
+
+    collected: dict[str, set[str]] = {}
+    for row in rows:
+        accumulate_property_schema(collected, row)
+    assert property_schema_from_collected(collected) == schema
 
 
 def test_job_type_maps_to_celery_task_name() -> None:

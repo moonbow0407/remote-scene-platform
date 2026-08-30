@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import json
 import zipfile
 from enum import StrEnum
 from pathlib import Path
 
 from app.processing.errors import DeterministicError
+from app.processing.geojson_stream import peek_geojson_root_type
 
 _TIFF_MAGICS = (b"II*\x00", b"MM\x00*", b"II+\x00", b"MM\x00+")
 _SQLITE_MAGIC = b"SQLite format 3"
@@ -40,8 +40,12 @@ def sniff_head(magic: bytes) -> DetectedKind:
 
 
 def detect_file(path: Path) -> DetectedKind:
-    """下载到本地后的完整探测；损坏 ZIP 视为确定性错误。"""
-    head = path.read_bytes()[:64]
+    """下载到本地后的完整探测；损坏 ZIP 视为确定性错误。
+
+    只读文件头 64 字节再按类型做廉价校验，禁止 path.read_bytes() 把整个对象载入内存。
+    """
+    with path.open("rb") as handle:
+        head = handle.read(64)
     kind = sniff_head(head)
     if kind is DetectedKind.SHAPEFILE_ZIP:
         _require_shapefile_zip(path)
@@ -93,11 +97,8 @@ def _safe_zip_name(raw: str) -> str:
 
 
 def _require_geojson(path: Path) -> None:
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise DeterministicError("INVALID_VECTOR_ARCHIVE", "不是合法 GeoJSON 文本") from exc
-    if not isinstance(payload, dict) or payload.get("type") not in ("FeatureCollection", "Feature"):
+    root_type = peek_geojson_root_type(path)
+    if root_type not in ("FeatureCollection", "Feature"):
         raise DeterministicError(
             "INVALID_VECTOR_ARCHIVE", "GeoJSON 必须是 FeatureCollection 或 Feature"
         )

@@ -25,13 +25,24 @@ class VectorFeatureService:
             or 0
         )
 
-    def replace_version_features(self, version_id: UUID, rows: list[VectorFeature]) -> None:
-        """同一事务内删除旧要素再写入；失败回滚后不会残留部分要素。"""
+    def delete_version_features(self, version_id: UUID) -> None:
         self._session.execute(
             sa.delete(VectorFeature).where(VectorFeature.asset_version_id == version_id)
         )
+
+    def insert_feature_batch(self, rows: list[VectorFeature]) -> None:
+        """flush 后 expunge，避免身份映射持有已写入要素。"""
+        if not rows:
+            return
         self._session.add_all(rows)
         self._session.flush()
+        for row in rows:
+            self._session.expunge(row)
+
+    def replace_version_features(self, version_id: UUID, rows: list[VectorFeature]) -> None:
+        """同一事务内删除旧要素再写入；失败回滚后不会残留部分要素。"""
+        self.delete_version_features(version_id)
+        self.insert_feature_batch(rows)
 
     def search(
         self,

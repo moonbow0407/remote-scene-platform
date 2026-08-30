@@ -110,7 +110,7 @@ uv run alembic upgrade head     # 迁移（需可达 PostgreSQL）
 | cleanup | 过期资产物理清理、blob 引用复核与 MinIO 退避删除 | `python -m app.cleanup.main` |
 | nginx | 唯一对外入口 `:8080`；`/tiles/` fail-closed，令牌由 API 校验 | — |
 
-基础设施：PostgreSQL/PostGIS 16-3.4、MinIO（本机 `127.0.0.1:9000`）、RabbitMQ 3.13（Management 仅内网）、TiTiler、
+基础设施：PostgreSQL/PostGIS 16-3.4、MinIO `RELEASE.2025-09-07T16-13-09Z`（本机 `127.0.0.1:9000`，健康检查用镜像自带 `mc ready local`）、RabbitMQ 3.13（Management 仅内网）、TiTiler、
 Prometheus（`:9090`），Grafana 位于 `observability` profile（可选）。
 
 ## 目录结构

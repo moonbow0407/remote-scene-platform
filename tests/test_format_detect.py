@@ -58,3 +58,35 @@ def test_geojson_must_be_feature_collection(tmp_path: Path) -> None:
     path.write_text(json.dumps({"type": "Point", "coordinates": [0, 0]}), encoding="utf-8")
     with pytest.raises(DeterministicError):
         detect_file(path)
+
+
+def test_detect_file_does_not_materialize_whole_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "points.geojson"
+    path.write_text('{"type":"FeatureCollection","features":[]}', encoding="utf-8")
+
+    def boom_bytes(self: Path) -> bytes:
+        raise AssertionError("detect_file 不得调用 Path.read_bytes() 载入整文件")
+
+    def boom_text(self: Path, *args: object, **kwargs: object) -> str:
+        raise AssertionError("detect_file 不得调用 Path.read_text() 载入整文件")
+
+    monkeypatch.setattr(Path, "read_bytes", boom_bytes)
+    monkeypatch.setattr(Path, "read_text", boom_text)
+    assert detect_file(path) is DetectedKind.GEOJSON
+
+
+def test_detect_single_feature_geojson(tmp_path: Path) -> None:
+    path = tmp_path / "one.geojson"
+    path.write_text(
+        json.dumps(
+            {
+                "type": "Feature",
+                "geometry": {"type": "Point", "coordinates": [114.0, 30.0]},
+                "properties": {"name": "a"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert detect_file(path) is DetectedKind.GEOJSON

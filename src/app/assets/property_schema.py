@@ -52,13 +52,22 @@ def json_value_type(value: Any) -> str:
     return "string"
 
 
+def accumulate_property_schema(collected: dict[str, set[str]], props: dict[str, Any]) -> None:
+    """把单条要素属性并入类型并集，供流式入库单遍统计。"""
+    for key, value in props.items():
+        collected.setdefault(str(key), set()).add(json_value_type(value))
+
+
+def property_schema_from_collected(collected: dict[str, set[str]]) -> list[dict[str, Any]]:
+    return [{"name": name, "types": sorted(types)} for name, types in sorted(collected.items())]
+
+
 def infer_property_schema(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """从要素属性推断 [{name, types}]，供 vector_asset_version.property_schema。"""
     collected: dict[str, set[str]] = {}
     for props in rows:
-        for key, value in props.items():
-            collected.setdefault(str(key), set()).add(json_value_type(value))
-    return [{"name": name, "types": sorted(types)} for name, types in sorted(collected.items())]
+        accumulate_property_schema(collected, props)
+    return property_schema_from_collected(collected)
 
 
 def validate_properties(schema: dict[str, Any], properties: dict[str, Any]) -> None:

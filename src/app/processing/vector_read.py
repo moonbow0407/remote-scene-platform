@@ -1,12 +1,17 @@
-"""读取 GeoJSON / Shapefile ZIP / GeoPackage 为源 CRS 下的 shapely 几何。"""
+"""读取 GeoJSON / Shapefile ZIP / GeoPackage 为源 CRS 下的 shapely 几何。
+
+按要素迭代，不把整个图层物化成 list。ZIP 成员流式落到磁盘；Shapefile/GPKG
+用游标/迭代器。调用方必须随用随弃当前要素，才能把峰值内存限制在单要素量级。
+"""
 
 from __future__ import annotations
 
-import json
 import math
+import shutil
 import sqlite3
 import zipfile
-from dataclasses import dataclass, replace
+from collections.abc import Iterator
+from dataclasses import dataclass
 from datetime import date, datetime, time
 from decimal import Decimal
 from pathlib import Path
@@ -18,39 +23,47 @@ from shapely.geometry.base import BaseGeometry
 
 from app.processing.detect import DetectedKind, _safe_zip_name
 from app.processing.errors import DeterministicError, NeedsInputError
+from app.processing.geojson_stream import iter_geojson_feature_objects
 from app.processing.gpkg import decode_geometry
+
+_COPY_CHUNK = 1024 * 1024
+_GPKG_FETCH_SIZE = 1024
 
 
 @dataclass
 class VectorLayer:
     source_crs: str | None
-    geometry_type: str
-    features: list[tuple[BaseGeometry, dict[str, Any]]]
+    features: Iterator[tuple[BaseGeometry, dict[str, Any]]]
 
 
 def read_vector_layer(path: Path, kind: DetectedKind, *, user_crs: str | None) -> VectorLayer:
+    source_crs, features = iter_vector_features(path, kind, user_crs=user_crs)
+    return VectorLayer(source_crs=source_crs, features=features)
+
+
+def iter_vector_features(
+    path: Path, kind: DetectedKind, *, user_crs: str | None
+) -> tuple[str, Iterator[tuple[BaseGeometry, dict[str, Any]]]]:
     if kind is DetectedKind.GEOJSON:
-        layer = _read_geojson(path)
+        source_crs, raw = _iter_geojson(path)
     elif kind is DetectedKind.SHAPEFILE_ZIP:
-        layer = _read_shapefile_zip(path)
+        source_crs, raw = _iter_shapefile_zip(path)
     elif kind is DetectedKind.GEOPACKAGE:
-        layer = _read_geopackage(path)
+        source_crs, raw = _iter_geopackage(path)
     else:
         raise DeterministicError("UNSUPPORTED_FORMAT", f"不支持的矢量格式：{kind}")
-    layer = replace(
-        layer,
-        features=[(geom, normalize_properties(props)) for geom, props in layer.features],
-    )
-    if not layer.features:
-        raise DeterministicError("NO_FEATURES", "矢量文件不包含可导入要素")
-    if layer.source_crs is None:
-        if user_crs is None:
-            raise NeedsInputError(
-                reason="MISSING_CRS",
-                detail="矢量缺少 CRS 且未提供补充信息；请提交 EPSG 代码后从断点继续",
-            )
-        layer.source_crs = user_crs
-    return layer
+    try:
+        if source_crs is None:
+            if user_crs is None:
+                raise NeedsInputError(
+                    reason="MISSING_CRS",
+                    detail="矢量缺少 CRS 且未提供补充信息；请提交 EPSG 代码后从断点继续",
+                )
+            source_crs = user_crs
+        return source_crs, _normalize_feature_iter(raw)
+    except Exception:
+        _close_iterator(raw)
+        raise
 
 
 def normalize_properties(props: dict[str, Any]) -> dict[str, Any]:
@@ -83,19 +96,25 @@ def normalize_json_value(value: Any) -> Any:
     )
 
 
-def _read_geojson(path: Path) -> VectorLayer:
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    if payload.get("type") == "FeatureCollection":
-        features_raw = payload.get("features")
-    else:
-        features_raw = [payload]
-    if not isinstance(features_raw, list):
-        raise DeterministicError("INVALID_VECTOR_ARCHIVE", "GeoJSON FeatureCollection 不合法")
-    features: list[tuple[BaseGeometry, dict[str, Any]]] = []
-    types: set[str] = set()
-    for item in features_raw:
-        if not isinstance(item, dict) or item.get("type") != "Feature":
-            raise DeterministicError("INVALID_VECTOR_ARCHIVE", "GeoJSON 含非 Feature 成员")
+def _normalize_feature_iter(
+    features: Iterator[tuple[BaseGeometry, dict[str, Any]]],
+) -> Iterator[tuple[BaseGeometry, dict[str, Any]]]:
+    try:
+        for geom, props in features:
+            yield geom, normalize_properties(props)
+    finally:
+        close = getattr(features, "close", None)
+        if close is not None:
+            close()
+
+
+def _iter_geojson(path: Path) -> tuple[str, Iterator[tuple[BaseGeometry, dict[str, Any]]]]:
+    # RFC 7946：坐标为 WGS84，等同 EPSG:4326
+    return "EPSG:4326", _geojson_features(path)
+
+
+def _geojson_features(path: Path) -> Iterator[tuple[BaseGeometry, dict[str, Any]]]:
+    for item in iter_geojson_feature_objects(path):
         geom_obj = item.get("geometry")
         if not geom_obj:
             continue
@@ -106,58 +125,74 @@ def _read_geojson(path: Path) -> VectorLayer:
             raise DeterministicError("INVALID_GEOMETRY", "GeoJSON 含无效几何")
         raw_props = item.get("properties")
         props: dict[str, Any] = dict(raw_props) if isinstance(raw_props, dict) else {}
-        features.append((geom, props))
-        types.add(geom.geom_type)
-    # RFC 7946：坐标为 WGS84，等同 EPSG:4326
-    return VectorLayer(source_crs="EPSG:4326", geometry_type=_unify_types(types), features=features)
+        yield geom, props
 
 
-def _read_shapefile_zip(path: Path) -> VectorLayer:
-    import shapefile
-
+def _iter_shapefile_zip(
+    path: Path,
+) -> tuple[str | None, Iterator[tuple[BaseGeometry, dict[str, Any]]]]:
     unpack = path.parent / "unpack"
     unpack.mkdir(parents=True, exist_ok=True)
+    _extract_zip_members(path, unpack)
+    shp_files = list(unpack.glob("*.shp"))
+    if len(shp_files) != 1:
+        raise DeterministicError("INVALID_VECTOR_ARCHIVE", "ZIP 中必须恰好包含一个 .shp")
+    shp_path = shp_files[0]
+    crs = _crs_from_prj(shp_path.with_suffix(".prj"))
+    return crs, _shapefile_features(shp_path)
+
+
+def _extract_zip_members(path: Path, dest: Path) -> None:
     with zipfile.ZipFile(path) as archive:
         for info in archive.infolist():
             if info.is_dir():
                 continue
             name = _safe_zip_name(info.filename)
-            target = unpack / Path(name).name
-            target.write_bytes(archive.read(info))
-    shp_files = list(unpack.glob("*.shp"))
-    if len(shp_files) != 1:
-        raise DeterministicError("INVALID_VECTOR_ARCHIVE", "ZIP 中必须恰好包含一个 .shp")
-    shp_path = shp_files[0]
+            target = dest / Path(name).name
+            with archive.open(info) as src, target.open("wb") as dst:
+                shutil.copyfileobj(src, dst, length=_COPY_CHUNK)
+
+
+def _shapefile_features(shp_path: Path) -> Iterator[tuple[BaseGeometry, dict[str, Any]]]:
+    import shapefile
+
     reader = shapefile.Reader(str(shp_path.with_suffix("")))
-    field_names = [field[0] for field in reader.fields[1:]]
-    features: list[tuple[BaseGeometry, dict[str, Any]]] = []
-    types: set[str] = set()
-    for sr in reader.shapeRecords():
-        shp = sr.shape
-        rec = sr.record
-        if shp is None or rec is None:
-            continue
-        geojson: dict[str, Any] = dict(shp.__geo_interface__)
-        if geojson.get("type") is None:
-            continue
-        geom = shape(geojson)
-        if geom.is_empty:
-            continue
-        if not geom.is_valid:
-            raise DeterministicError("INVALID_GEOMETRY", "Shapefile 含无效几何")
-        props = {
-            str(field_names[i]): _normalize_shp_value(rec[i]) for i in range(len(field_names))
-        }
-        features.append((geom, props))
-        types.add(geom.geom_type)
-    reader.close()
-    crs = _crs_from_prj(shp_path.with_suffix(".prj"))
-    return VectorLayer(source_crs=crs, geometry_type=_unify_types(types), features=features)
+    try:
+        field_names = [field[0] for field in reader.fields[1:]]
+        for sr in reader.iterShapeRecords():
+            shp = sr.shape
+            rec = sr.record
+            if shp is None or rec is None:
+                continue
+            geojson: dict[str, Any] = dict(shp.__geo_interface__)
+            if geojson.get("type") is None:
+                continue
+            geom = shape(geojson)
+            if geom.is_empty:
+                continue
+            if not geom.is_valid:
+                raise DeterministicError("INVALID_GEOMETRY", "Shapefile 含无效几何")
+            props = {
+                str(field_names[i]): _normalize_shp_value(rec[i]) for i in range(len(field_names))
+            }
+            yield geom, props
+    finally:
+        reader.close()
 
 
-def _read_geopackage(path: Path) -> VectorLayer:
+def _iter_geopackage(
+    path: Path,
+) -> tuple[str | None, Iterator[tuple[BaseGeometry, dict[str, Any]]]]:
     conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
+    closed = False
+
+    def close_conn() -> None:
+        nonlocal closed
+        if not closed:
+            closed = True
+            conn.close()
+
     try:
         contents = conn.execute(
             "SELECT table_name, srs_id FROM gpkg_contents WHERE data_type='features'"
@@ -182,28 +217,39 @@ def _read_geopackage(path: Path) -> VectorLayer:
             srs_id = geom_col_row["srs_id"]
         columns = [info[1] for info in conn.execute(f"PRAGMA table_info({_quote_ident(table)})")]
         attr_cols = [c for c in columns if c != geom_col]
-        rows = conn.execute(f"SELECT * FROM {_quote_ident(table)}").fetchall()
-    finally:
-        conn.close()
+        crs = f"EPSG:{int(srs_id)}" if srs_id not in (None, 0) else None
+        inner = _geopackage_features(conn, table, geom_col, attr_cols)
+        return crs, _ClosingIter(inner, close_conn)
+    except Exception:
+        close_conn()
+        raise
 
-    features: list[tuple[BaseGeometry, dict[str, Any]]] = []
-    types: set[str] = set()
-    for row in rows:
-        mapping = dict(row)
-        blob = mapping.get(geom_col)
-        if blob is None:
-            continue
-        _srs, wkb = decode_geometry(bytes(blob))
-        geom = from_wkb(wkb)
-        if geom.is_empty:
-            continue
-        if not geom.is_valid:
-            raise DeterministicError("INVALID_GEOMETRY", "GeoPackage 含无效几何")
-        props = {col: mapping[col] for col in attr_cols if col.lower() != "fid"}
-        features.append((geom, props))
-        types.add(geom.geom_type)
-    crs = f"EPSG:{int(srs_id)}" if srs_id not in (None, 0) else None
-    return VectorLayer(source_crs=crs, geometry_type=_unify_types(types), features=features)
+
+def _geopackage_features(
+    conn: sqlite3.Connection,
+    table: str,
+    geom_col: str,
+    attr_cols: list[str],
+) -> Iterator[tuple[BaseGeometry, dict[str, Any]]]:
+    cursor = conn.execute(f"SELECT * FROM {_quote_ident(table)}")
+    cursor.arraysize = _GPKG_FETCH_SIZE
+    while True:
+        rows = cursor.fetchmany(_GPKG_FETCH_SIZE)
+        if not rows:
+            break
+        for row in rows:
+            mapping = dict(row)
+            blob = mapping.get(geom_col)
+            if blob is None:
+                continue
+            _srs, wkb = decode_geometry(bytes(blob))
+            geom = from_wkb(wkb)
+            if geom.is_empty:
+                continue
+            if not geom.is_valid:
+                raise DeterministicError("INVALID_GEOMETRY", "GeoPackage 含无效几何")
+            props = {col: mapping[col] for col in attr_cols if col.lower() != "fid"}
+            yield geom, props
 
 
 def _crs_from_prj(path: Path) -> str | None:
@@ -222,7 +268,7 @@ def _crs_from_prj(path: Path) -> str | None:
         return None
 
 
-def _unify_types(types: set[str]) -> str:
+def unify_geometry_types(types: set[str]) -> str:
     if not types:
         return "Geometry"
     if len(types) == 1:
@@ -247,3 +293,39 @@ def _quote_ident(name: str) -> str:
 
 def shapely_to_wkt(geom: BaseGeometry) -> str:
     return geom.wkt
+
+
+def _close_iterator(features: Iterator[Any]) -> None:
+    close = getattr(features, "close", None)
+    if close is not None:
+        close()
+
+
+class _ClosingIter:
+    """在迭代结束、失败或显式 close 时释放外部资源。
+
+    未启动的 generator.close() 不会执行函数体，因此 SQLite 连接必须挂在这个包装器上。
+    """
+
+    def __init__(self, inner: Iterator[Any], closer: Any) -> None:
+        self._inner = inner
+        self._closer = closer
+
+    def __iter__(self) -> _ClosingIter:
+        return self
+
+    def __next__(self) -> Any:
+        try:
+            return next(self._inner)
+        except (Exception, StopIteration):
+            self.close()
+            raise
+
+    def close(self) -> None:
+        closer = self._closer
+        self._closer = None
+        if closer is not None:
+            closer()
+        close = getattr(self._inner, "close", None)
+        if close is not None:
+            close()
