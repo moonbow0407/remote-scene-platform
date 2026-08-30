@@ -24,6 +24,7 @@ from app.ecology.router import router as ecology_router
 from app.errors import ProblemError
 from app.jobs.router import router as jobs_router
 from app.logging import configure_logging, trace_id_var
+from app.monitoring.router import router as monitoring_router
 from app.settings import get_settings
 from app.tiles.router import router as tiles_router
 from app.uploads.router import router as uploads_router
@@ -99,6 +100,7 @@ def create_app() -> FastAPI:
     app.include_router(features_router, prefix=API_V1_PREFIX)
     app.include_router(catalogs_router, prefix=API_V1_PREFIX)
     app.include_router(ecology_router, prefix=API_V1_PREFIX)
+    app.include_router(monitoring_router, prefix=API_V1_PREFIX)
 
     @app.exception_handler(ProblemError)
     async def problem_error_handler(request: Request, exc: ProblemError) -> JSONResponse:

@@ -14,6 +14,8 @@ dependencies = [
     "prometheus-client>=0.20",
     "argon2-cffi>=25.1.0",
     "pyjwt>=2.13.0",
+    # Stage 5：监测计划 RRULE（RFC 5545）解析与周期计算
+    "python-dateutil>=2.9",
 ]
 
 [dependency-groups]

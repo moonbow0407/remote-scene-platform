@@ -28,11 +28,11 @@ MinIO 保存不可变对象，RabbitMQ 仅负责消息传递，TiTiler 由 Nginx
 | **Stage 2** 栅格纵向闭环 | 主体已落地 | 上传 → Outbox → Worker → COG → PostGIS → 瓦片令牌。关闭与否以 A2.1–A2.10 为准 |
 | **Stage 3** 矢量与附件 | 主体已落地 | 同一资产生命周期上 GeoJSON/Shapefile/GPKG 导入、附件 READY、要素空间检索、JSON Schema。关闭与否以 A3.1–A3.5 为准 |
 | **Stage 4** 目录与生态映射 | 已完成 | 资源目录树、卫星/传感器、生态参数与显式多对多映射；资产分类外键；检索按目录（含子树）/卫星/传感器/生态映射过滤。A4.1–A4.3 已在 Compose 上通过 |
-| **Stage 5** 监测计划与调度 | 未开始 | 计划、RRULE/间隔、Scheduler 锁、增量选择、不可变输入快照 |
+| **Stage 5** 监测计划与调度 | 主体已落地 | 计划/occurrence/执行/输入快照模型，RRULE 与固定间隔，Scheduler 互斥锁与停机补跑，增量资产选择，不可变输入快照，派发接缝。全链路验收（A5.1–A5.5）待与 Job 派发接线后执行 |
 | **Stage 6** 生命周期与可靠性 | 未开始 | 软删除与 7 天恢复、无引用对象清理、超时/取消、运维指标 |
 | **Stage 7** 迁移收口 | 未开始 | 矩阵核对、全量验收、OpenAPI 与前端交接 |
 
-**当前工作：关闭 Stage 2 / Stage 3 验收；Stage 5 未开始。**
+**当前工作：Stage 5 监测计划与调度主体已落地；监测执行的 Job 派发接线与全链路验收（A5.1–A5.5）待后续合入。**
 
 ## 已交付能力（截至 Stage 4）
 
@@ -58,10 +58,13 @@ MinIO 保存不可变对象，RabbitMQ 仅负责消息传递，TiTiler 由 Nginx
 | 卫星 / 传感器 | `GET/POST /api/v1/catalogs/satellites`、`…/sensors`、`GET …/satellites/{id}/sensors` |
 | 生态参数 | `GET/POST /api/v1/ecology/parameters`、`…/tree`、`…/{id}` |
 | 生态↔资源映射 | `GET/POST /api/v1/ecology/mappings`、`POST …/mappings/batch` |
+| 监测计划 | `GET/POST /api/v1/monitoring/plans`、`GET/PUT/DELETE …/plans/{id}` |
+| 计划暂停/恢复/手动触发 | `POST …/plans/{id}/pause`、`…/resume`、`…/trigger` |
+| 监测执行与输入快照 | `GET …/plans/{id}/runs`、`GET /api/v1/monitoring/runs/{id}`、`…/inputs`；执行方状态接缝 `POST …/runs/{id}/start|succeed|fail` |
 
 Prometheus 指标 `GET /api/v1/metrics` 仅 Compose 内网抓取，Nginx 对外返回 404。
 
-上传支持栅格 TIFF、矢量（GeoJSON / Shapefile ZIP / GeoPackage）和普通附件；创建会话可同时绑定资源目录、卫星与传感器。监测计划尚未提供 API。
+上传支持栅格 TIFF、矢量（GeoJSON / Shapefile ZIP / GeoPackage）和普通附件；创建会话可同时绑定资源目录、卫星与传感器。监测计划支持固定间隔（ISO 8601 duration 子集）与 RRULE（RFC 5545）调度：到期由独立 Scheduler 扫描派发（多实例经 PostgreSQL advisory lock 互斥，occurrence `(plan_id, scheduled_for)` 数据库唯一），停机只补跑最近一次、其余周期记 `MISSED`；每次执行按增量窗口（上次成功执行之后）选择 READY 资产版本并冻结不可变输入快照。监测执行的 Job 派发接线与全链路验收尚未完成（见「阶段进度」）。
 
 ## 快速启动
 
@@ -98,7 +101,7 @@ uv run alembic upgrade head     # 迁移（需可达 PostgreSQL）
 | api | FastAPI，Nginx 反代 `/api/`，启动时执行迁移 | `app.api.app:create_app --factory` |
 | worker | Celery Geo Worker，队列 `geo`，并发 2 | `app.worker.celery_app:celery` |
 | dispatcher | Outbox 投递循环 | `python -m app.dispatcher.main` |
-| scheduler | 监测计划调度循环（Stage 5 实装） | `python -m app.scheduler.main` |
+| scheduler | 监测计划调度循环：advisory lock 互斥 + 到期扫描 + occurrence 幂等派发 + 停机补跑 | `python -m app.scheduler.main` |
 | nginx | 唯一对外入口 `:8080`；`/tiles/` fail-closed，令牌由 API 校验 | — |
 
 基础设施：PostgreSQL/PostGIS 16-3.4、MinIO（本机 `127.0.0.1:9000`）、RabbitMQ 3.13（Management 仅内网）、TiTiler、
@@ -116,6 +119,7 @@ src/app/
 ├── uploads/    # MinIO Multipart 上传会话
 ├── catalogs/   # 资源目录、卫星、传感器（Stage 4）
 ├── ecology/    # 生态参数与资源映射（Stage 4）
+├── monitoring/ # 监测计划、occurrence、执行与输入快照（Stage 5）
 ├── auth/       # JWT 用户鉴权接缝
 ├── jobs/       # Job 状态机、事件、Outbox
 ├── processing/ # 栅格/矢量/附件入库流水线与 Celery 任务
@@ -124,14 +128,15 @@ src/app/
 ├── worker/     # Celery Geo Worker
 ├── dispatcher/ # Outbox Dispatcher
 └── scheduler/  # 独立 Scheduler
-alembic/        # 迁移（0001 PostGIS，0002 栅格，0003 矢量/附件，0004 用户，0005 目录/生态与资产外键）
+alembic/        # 迁移（0001 PostGIS，0002 栅格，0003 矢量/附件，0004 用户，0005 目录/生态与资产外键，0006 上传会话属性，0007 Job 租约，0008 监测计划/occurrence/执行/输入快照）
 docker/         # api/worker 镜像与 Nginx 配置
 prometheus/     # 抓取配置
 doc/            # 架构、阶段方案、迁移矩阵、验收基线
 tests/          # 进程内测试；集成测试随阶段补充
 ```
 
-尚未落地、不要预先建空目录：`monitoring`。
+尚未落地：监测执行的 Job 派发接线（`monitoring.service.DeferredRunDispatcher`，TODO 见
+`src/app/monitoring/service.py`）与 Stage 5 全链路人工验收 A5.1–A5.5；不要预先建其他空目录。
 
 ## 约定摘要
 

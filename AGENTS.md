@@ -61,7 +61,8 @@ tests/fixtures/     # 验收夹具
 doc/                # 总体架构、阶段方案、迁移矩阵、验收基线
 ```
 
-尚未落地、不要预先建空目录的模块：`monitoring`。按 Stage 5 随用例创建。
+已随 Stage 5 落地的模块：`monitoring`（监测计划、occurrence、执行与输入快照）；其派发接缝
+`DeferredRunDispatcher` 待接线，接线前不要创建其他空目录。
 
 每个已落地模块内部按 `router / schemas / service / models` 组织。本模块查询可以写在 Service；只有查询复杂到需要独立测试或复用时才抽取 Repository。模块之间通过公开 Service 协作，不跨模块直接访问 ORM 或内部实现。
 

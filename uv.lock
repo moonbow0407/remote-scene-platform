@@ -1162,6 +1162,7 @@ dependencies = [
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "pyjwt" },
+    { name = "python-dateutil" },
     { name = "sqlalchemy" },
     { name = "uuid-utils" },
 ]
@@ -1201,6 +1202,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.8" },
     { name = "pydantic-settings", specifier = ">=2.4" },
     { name = "pyjwt", specifier = ">=2.13.0" },
+    { name = "python-dateutil", specifier = ">=2.9" },
     { name = "sqlalchemy", specifier = ">=2.0.30" },
     { name = "uuid-utils", specifier = ">=0.9" },
 ]
