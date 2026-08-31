@@ -87,16 +87,54 @@ curl -s http://localhost:9090/-/healthy            # Prometheus
 
 ## 本地开发
 
+进程内测试与静态检查不需要容器：
+
 ```bash
 uv sync --all-groups            # 安装全部依赖组（api/worker/dev）
 uv run pytest                   # 进程内测试
 uv run ruff check .             # 静态检查
 uv run pyright                  # 类型检查
-uv run alembic upgrade head     # 迁移（需可达 PostgreSQL）
 ```
+
+日常联调（WSL Docker Engine + 本机 `uv run`）：不要用 Windows 上的 PostgreSQL 15 / Redis / MySQL。
+基础设施用 Compose，应用进程留在 WSL。PostGIS 映射 `127.0.0.1:55432`，避开 Windows `5432`。
+
+```bash
+# 1. 只起基础设施（不要 --build 应用镜像）
+docker compose up -d db minio minio-init rabbitmq titiler
+docker compose ps
+
+# 2. 原生进程读 .env.native（容器内进程仍读 .env）
+cp .env.native.example .env.native   # 首次
+set -a && source .env.native && set +a
+mkdir -p /tmp/remote-scene-worker
+uv run alembic upgrade head
+
+# 3. 分终端启动（需要热重载与看日志时）
+uv run uvicorn app.api.app:create_app --factory --host 127.0.0.1 --port 8000 --reload
+uv run python -m app.dispatcher.main
+uv run celery -A app.worker.celery_app:celery worker -Q geo --concurrency 2 --loglevel INFO
+# 需要调度 / 租约回收 / 清理时再开：
+# uv run python -m app.scheduler.main
+# uv run python -m app.recovery.main
+# uv run python -m app.cleanup.main
+```
+
+验证：`curl -s http://127.0.0.1:8000/api/v1/readyz`。浏览器访问 MinIO 控制台 `http://127.0.0.1:9001`。
+瓦片网关（Nginx `:8080` fail-closed）需要全栈 Compose，日常改 API 不必起 nginx。
+
+干净环境验收仍走全栈：
+
+```bash
+docker compose up -d --build
+curl -s http://127.0.0.1:8080/api/v1/readyz
+```
+
+此时用 `.env`（容器 DNS：`db` / `minio` / `rabbitmq` / `titiler`），不要 source `.env.native`。
 
 依赖组边界：API 镜像只装基础依赖 + `api` 组（无 GDAL/科学栈）；Geo Worker 镜像装 `worker`
 组（Celery + rasterio/shapely/pyproj/numpy，GDAL 由基础镜像提供）。
+WSL 原生 Worker 依赖本机已 `uv sync --all-groups` 安装的 rasterio 等；不要把 GDAL 装进 API 进程。
 
 ## 进程与端口
 
@@ -110,8 +148,9 @@ uv run alembic upgrade head     # 迁移（需可达 PostgreSQL）
 | cleanup | 过期资产物理清理、blob 引用复核与 MinIO 退避删除 | `python -m app.cleanup.main` |
 | nginx | 唯一对外入口 `:8080`；`/tiles/` fail-closed，令牌由 API 校验 | — |
 
-基础设施：PostgreSQL/PostGIS 16-3.4、MinIO `RELEASE.2025-09-07T16-13-09Z`（本机 `127.0.0.1:9000`，健康检查用镜像自带 `mc ready local`）、RabbitMQ 3.13（Management 仅内网）、TiTiler、
+基础设施：PostgreSQL/PostGIS 16-3.4（本机 `127.0.0.1:55432`，避开 Windows PostgreSQL 15 的 5432）、MinIO `RELEASE.2025-09-07T16-13-09Z`（`127.0.0.1:9000/9001`）、RabbitMQ 3.13（`127.0.0.1:5672`，Management `15672`）、TiTiler（`127.0.0.1:8081`）、
 Prometheus（`:9090`），Grafana 位于 `observability` profile（可选）。
+Docker Hub 直连超时时，可 `sudo ./scripts/apply-docker-wsl-network.sh` 让 dockerd 走本机 `127.0.0.1:7897` 代理并启用镜像源。
 
 ## 目录结构
 

@@ -10,6 +10,9 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-remote_scene}
     volumes:
       - pgdata:/var/lib/postgresql/data
+    # 仅回环。55432 避开 Windows 本机 PostgreSQL 15 的 5432，供 WSL 原生进程连接。
+    ports:
+      - "127.0.0.1:55432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-app} -d ${POSTGRES_DB:-remote_scene}"]
       interval: 5s
@@ -60,6 +63,9 @@ services:
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-app}
     volumes:
       - rabbitmqdata:/var/lib/rabbitmq
+    ports:
+      - "127.0.0.1:5672:5672"
+      - "127.0.0.1:15672:15672"
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
       interval: 10s
@@ -79,6 +85,8 @@ services:
       WEB_CONCURRENCY: "2"
       # TiTiler 仍接收去前缀后的内部路径，但生成外部 URL 时必须带受控网关前缀。
       TITILER_API_ROOT_PATH: /tiles
+    ports:
+      - "127.0.0.1:8081:80"
     restart: unless-stopped
 
   api:
