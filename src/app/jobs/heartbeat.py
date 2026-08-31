@@ -31,7 +31,7 @@ class LeaseHeartbeat:
         self,
         *,
         factory: Any,
-        job_id: UUID,
+        job_id: int,
         lease_token: UUID,
         interval_seconds: float,
         ttl_seconds: int,

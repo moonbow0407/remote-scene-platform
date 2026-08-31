@@ -1,7 +1,6 @@
 """鉴权与用户管理路由：HTTP 适配层，JWT 细节不进入业务 Service。"""
 
 from typing import Annotated
-from uuid import UUID
 
 from fastapi import APIRouter, Depends, Path, Request
 from sqlalchemy.orm import Session
@@ -133,7 +132,7 @@ def create_user(
     response_model=UserPublic,
 )
 def get_user(
-    user_id: Annotated[UUID, Path(description="用户 ID")],
+    user_id: Annotated[int, Path(description="用户 ID")],
     actor: Annotated[ActorContext, Depends(get_current_actor)],
     service: Annotated[AuthService, Depends(_service)],
 ) -> UserPublic:
@@ -148,7 +147,7 @@ def get_user(
     response_model=UserPublic,
 )
 def update_user(
-    user_id: Annotated[UUID, Path(description="用户 ID")],
+    user_id: Annotated[int, Path(description="用户 ID")],
     body: UserUpdateRequest,
     _admin: Annotated[ActorContext, Depends(require_admin)],
     service: Annotated[AuthService, Depends(_service)],
@@ -170,7 +169,7 @@ def update_user(
     response_model=UserPublic,
 )
 def set_user_status(
-    user_id: Annotated[UUID, Path(description="用户 ID")],
+    user_id: Annotated[int, Path(description="用户 ID")],
     body: UserStatusRequest,
     admin: Annotated[ActorContext, Depends(require_admin)],
     service: Annotated[AuthService, Depends(_service)],

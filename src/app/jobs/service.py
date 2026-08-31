@@ -51,41 +51,40 @@ class JobService:
         *,
         job_type: JobType,
         payload: dict[str, Any],
-        asset_version_id: UUID | None = None,
+        asset_id: int | None = None,
         max_attempts: int = 4,
     ) -> tuple[Job, OutboxEvent]:
         """创建 Job 并同事务生成 Outbox 事件（由调用方的事务提交）。
 
         幂等语义：Job 创建与投递解耦；重复调用会创建重复 Job，
         调用方（上传完成）以唯一会话状态保证只调用一次。
-        asset_version_id 仅入库任务必填；MONITORING_RUN 为多版本输入快照，
-        权威关联在 monitoring_run_input，不伪造单版本引用。
+        asset_id 仅入库任务必填；MONITORING_RUN 为多资产输入快照，
+        权威关联在 monitoring_run_input。
         """
-        if asset_version_id is None and job_type is not JobType.MONITORING_RUN:
+        if asset_id is None and job_type is not JobType.MONITORING_RUN:
             raise ValueError(
-                f"任务类型 {job_type.value} 必须引用具体 asset_version_id；"
-                "仅 MONITORING_RUN 允许无单版本引用"
+                f"任务类型 {job_type.value} 必须引用具体 asset_id；"
+                "仅 MONITORING_RUN 允许无单资产引用"
             )
-        job_id = new_uuid7()
         job = Job(
-            id=job_id,
             job_type=job_type,
             status=JobStatus.PENDING,
-            payload={**payload, "job_id": str(job_id)},
+            payload=payload,
             max_attempts=max_attempts,
-            asset_version_id=asset_version_id,
+            asset_id=asset_id,
         )
         self._session.add(job)
         self._session.flush()
+        job.payload = {**payload, "job_id": str(job.id)}
 
         event = self._dispatch_event(job)
-        self.append_event(job_id, event_type="JOB_CREATED", detail={"job_type": job_type.value})
+        self.append_event(job.id, event_type="JOB_CREATED", detail={"job_type": job_type.value})
         return job, event
 
-    def get(self, job_id: UUID) -> Job | None:
+    def get(self, job_id: int) -> Job | None:
         return self._session.get(Job, job_id)
 
-    def get_required(self, job_id: UUID) -> Job:
+    def get_required(self, job_id: int) -> Job:
         job = self.get(job_id)
         if job is None:
             from app.errors import not_found
@@ -108,7 +107,7 @@ class JobService:
             )
         return job
 
-    def cancellation_checkpoint(self, job_id: UUID) -> bool:
+    def cancellation_checkpoint(self, job_id: int) -> bool:
         """Worker 步骤边界检查取消标志；返回 True 时调用方必须立即停止。"""
         job = self._session.scalar(sa.select(Job).where(Job.id == job_id).with_for_update())
         if job is None:
@@ -118,14 +117,14 @@ class JobService:
             return True
         return job.status is JobStatus.CANCELLED
 
-    def request_cancel_for_versions(self, version_ids: list[UUID]) -> list[UUID]:
+    def request_cancel_for_assets(self, asset_ids: list[int]) -> list[int]:
         """资产软删除时取消关联的非终态入库任务。"""
-        if not version_ids:
+        if not asset_ids:
             return []
         jobs = list(
             self._session.scalars(
                 sa.select(Job).where(
-                    Job.asset_version_id.in_(version_ids),
+                    Job.asset_id.in_(asset_ids),
                     Job.status.in_(
                         (
                             JobStatus.PENDING,
@@ -143,15 +142,15 @@ class JobService:
             self.request_cancel(job)
         return [job.id for job in jobs]
 
-    def has_active_for_versions(self, version_ids: list[UUID]) -> bool:
-        if not version_ids:
+    def has_active_for_assets(self, asset_ids: list[int]) -> bool:
+        if not asset_ids:
             return False
         return bool(
             self._session.scalar(
                 sa.select(sa.func.count())
                 .select_from(Job)
                 .where(
-                    Job.asset_version_id.in_(version_ids),
+                    Job.asset_id.in_(asset_ids),
                     Job.status.in_((JobStatus.RUNNING, JobStatus.CANCEL_REQUESTED)),
                 )
             )
@@ -191,7 +190,7 @@ class JobService:
 
     def append_event(
         self,
-        job_id: UUID,
+        job_id: int,
         *,
         event_type: str,
         from_status: JobStatus | None = None,
@@ -200,7 +199,6 @@ class JobService:
     ) -> None:
         self._session.add(
             JobEvent(
-                id=new_uuid7(),
                 job_id=job_id,
                 event_type=event_type,
                 from_status=from_status,
@@ -212,7 +210,6 @@ class JobService:
     def _dispatch_event(self, job: Job, *, delay_seconds: int | None = None) -> OutboxEvent:
         """构造本 Job 的投递事件（调用方事务内提交）；delay_seconds 用于重试退避。"""
         event = OutboxEvent(
-            id=new_uuid7(),
             aggregate_type="job",
             aggregate_id=job.id,
             event_type="job.dispatch",
@@ -259,7 +256,7 @@ class JobService:
         return self._dispatch_event(job, delay_seconds=retry_backoff_seconds(job.attempt))
 
     def claim_for_run(
-        self, job_id: UUID, *, lease_ttl_seconds: int = _DEFAULT_LEASE_TTL_SECONDS
+        self, job_id: int, *, lease_ttl_seconds: int = _DEFAULT_LEASE_TTL_SECONDS
     ) -> JobClaim:
         """Worker 认领：QUEUED/RETRYING/PENDING → RUNNING，并取得执行租约。
 
@@ -354,7 +351,7 @@ class OutboxRepository:
         event.next_attempt_at = now_utc() + timedelta(seconds=backoff)
         event.claim_expires_at = None
 
-    def set_job_queued_after_publish(self, job_ids: list[UUID]) -> None:
+    def set_job_queued_after_publish(self, job_ids: list[int]) -> None:
         """发布成功后把仍处于 PENDING 的 Job 推进到 QUEUED（尽力而为）。"""
         if not job_ids:
             return

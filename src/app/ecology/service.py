@@ -9,7 +9,6 @@
 from __future__ import annotations
 
 import logging
-from uuid import UUID
 
 import sqlalchemy as sa
 from sqlalchemy.exc import IntegrityError
@@ -29,18 +28,17 @@ from app.ecology.schemas import (
     MappingResponse,
 )
 from app.errors import conflict, not_found, validation_error
-from app.ids import new_uuid7
 from app.pagination import Page, PageParams
 
 logger = logging.getLogger(__name__)
 
 
-def _actor_uuid() -> UUID | None:
+def _actor_uuid() -> int | None:
     actor = get_actor()
     if actor.actor_id is None:
         return None
     try:
-        return UUID(actor.actor_id)
+        return int(actor.actor_id)
     except ValueError:
         return None
 
@@ -51,10 +49,10 @@ class EcologyService:
 
     # ----- Ecological Parameter -----
 
-    def get_parameter(self, parameter_id: UUID) -> EcologicalParameter | None:
+    def get_parameter(self, parameter_id: int) -> EcologicalParameter | None:
         return self._session.get(EcologicalParameter, parameter_id)
 
-    def get_parameter_required(self, parameter_id: UUID) -> EcologicalParameter:
+    def get_parameter_required(self, parameter_id: int) -> EcologicalParameter:
         row = self.get_parameter(parameter_id)
         if row is None:
             raise not_found("生态参数", parameter_id)
@@ -65,7 +63,7 @@ class EcologyService:
         params: PageParams,
         *,
         status: EcologicalParameterStatus | None = None,
-        parent_id: UUID | None = None,
+        parent_id: int | None = None,
         code: str | None = None,
         root_only: bool = False,
     ) -> Page[EcologicalParameter]:
@@ -98,7 +96,6 @@ class EcologyService:
         if body.parent_id is not None:
             self.get_parameter_required(body.parent_id)
         row = EcologicalParameter(
-            id=new_uuid7(),
             code=body.code,
             name=body.name,
             parent_id=body.parent_id,
@@ -118,7 +115,7 @@ class EcologyService:
         return row
 
     def update_parameter(
-        self, parameter_id: UUID, body: EcologicalParameterUpdate
+        self, parameter_id: int, body: EcologicalParameterUpdate
     ) -> EcologicalParameter:
         row = self.get_parameter_required(parameter_id)
         data = body.model_dump(exclude_unset=True)
@@ -134,7 +131,7 @@ class EcologyService:
         if "sort_order" in data:
             row.sort_order = data["sort_order"]
         if "parent_id" in data:
-            new_parent_id: UUID | None = data["parent_id"]
+            new_parent_id: int | None = data["parent_id"]
             if new_parent_id == parameter_id:
                 raise validation_error("不能将生态参数的父节点设为自己")
             if new_parent_id is not None:
@@ -155,7 +152,7 @@ class EcologyService:
             ) from exc
         return row
 
-    def delete_parameter(self, parameter_id: UUID) -> None:
+    def delete_parameter(self, parameter_id: int) -> None:
         row = self.get_parameter_required(parameter_id)
         child_count = self._session.scalar(
             sa.select(sa.func.count())
@@ -195,11 +192,11 @@ class EcologyService:
         if status is not None:
             stmt = stmt.where(EcologicalParameter.status == status)
         rows = list(self._session.scalars(stmt))
-        by_parent: dict[UUID | None, list[EcologicalParameter]] = {}
+        by_parent: dict[int | None, list[EcologicalParameter]] = {}
         for row in rows:
             by_parent.setdefault(row.parent_id, []).append(row)
 
-        def build(parent_id: UUID | None) -> list[EcologicalParameterTreeNode]:
+        def build(parent_id: int | None) -> list[EcologicalParameterTreeNode]:
             return [
                 EcologicalParameterTreeNode(
                     id=item.id,
@@ -214,7 +211,7 @@ class EcologyService:
 
         return build(None)
 
-    def _ensure_parameter_code_unique(self, code: str, *, exclude_id: UUID | None = None) -> None:
+    def _ensure_parameter_code_unique(self, code: str, *, exclude_id: int | None = None) -> None:
         stmt = sa.select(EcologicalParameter.id).where(EcologicalParameter.code == code)
         if exclude_id is not None:
             stmt = stmt.where(EcologicalParameter.id != exclude_id)
@@ -224,9 +221,9 @@ class EcologyService:
                 detail=f"生态参数编码 {code} 已存在",
             )
 
-    def _parameter_would_cycle(self, node_id: UUID, new_parent_id: UUID) -> bool:
-        current: UUID | None = new_parent_id
-        seen: set[UUID] = set()
+    def _parameter_would_cycle(self, node_id: int, new_parent_id: int) -> bool:
+        current: int | None = new_parent_id
+        seen: set[int] = set()
         while current is not None:
             if current == node_id:
                 return True
@@ -241,10 +238,10 @@ class EcologyService:
 
     # ----- Mappings -----
 
-    def get_mapping(self, mapping_id: UUID) -> EcologicalParameterResourceMapping | None:
+    def get_mapping(self, mapping_id: int) -> EcologicalParameterResourceMapping | None:
         return self._session.get(EcologicalParameterResourceMapping, mapping_id)
 
-    def get_mapping_required(self, mapping_id: UUID) -> EcologicalParameterResourceMapping:
+    def get_mapping_required(self, mapping_id: int) -> EcologicalParameterResourceMapping:
         row = self.get_mapping(mapping_id)
         if row is None:
             raise not_found("生态资源映射", mapping_id)
@@ -254,8 +251,8 @@ class EcologyService:
         self,
         params: PageParams,
         *,
-        ecological_parameter_id: UUID | None = None,
-        resource_catalog_id: UUID | None = None,
+        ecological_parameter_id: int | None = None,
+        category_id: int | None = None,
     ) -> Page[EcologicalParameterResourceMapping]:
         stmt = sa.select(EcologicalParameterResourceMapping)
         count_stmt = sa.select(sa.func.count()).select_from(EcologicalParameterResourceMapping)
@@ -268,12 +265,10 @@ class EcologyService:
                 EcologicalParameterResourceMapping.ecological_parameter_id
                 == ecological_parameter_id
             )
-        if resource_catalog_id is not None:
-            stmt = stmt.where(
-                EcologicalParameterResourceMapping.resource_catalog_id == resource_catalog_id
-            )
+        if category_id is not None:
+            stmt = stmt.where(EcologicalParameterResourceMapping.category_id == category_id)
             count_stmt = count_stmt.where(
-                EcologicalParameterResourceMapping.resource_catalog_id == resource_catalog_id
+                EcologicalParameterResourceMapping.category_id == category_id
             )
         total = int(self._session.scalar(count_stmt) or 0)
         rows = list(
@@ -293,27 +288,27 @@ class EcologyService:
         return self.get_mapping_required(result.existing[0].id)
 
     def update_mapping(
-        self, mapping_id: UUID, body: MappingCreate
+        self, mapping_id: int, body: MappingCreate
     ) -> EcologicalParameterResourceMapping:
         """原子替换映射两端；目标组合已由其他行占用时返回稳定冲突。"""
         row = self.get_mapping_required(mapping_id)
         self.get_parameter_required(body.ecological_parameter_id)
-        CatalogService(self._session).get_resource_required(body.resource_catalog_id)
+        CatalogService(self._session).get_required(body.category_id)
         duplicate = self._session.scalar(
             sa.select(EcologicalParameterResourceMapping.id).where(
                 EcologicalParameterResourceMapping.id != mapping_id,
                 EcologicalParameterResourceMapping.ecological_parameter_id
                 == body.ecological_parameter_id,
-                EcologicalParameterResourceMapping.resource_catalog_id == body.resource_catalog_id,
+                EcologicalParameterResourceMapping.category_id == body.category_id,
             )
         )
         if duplicate is not None:
             raise conflict(
                 code="ECOLOGY_MAPPING_CONFLICT",
-                detail="目标生态参数与资源目录的映射已存在",
+                detail="目标生态参数与分类的映射已存在",
             )
         row.ecological_parameter_id = body.ecological_parameter_id
-        row.resource_catalog_id = body.resource_catalog_id
+        row.category_id = body.category_id
         try:
             self._session.flush()
         except IntegrityError as exc:
@@ -329,10 +324,10 @@ class EcologyService:
             return MappingBatchResponse(created=[], existing=[], created_count=0, existing_count=0)
 
         # 输入去重（保持首次出现顺序）
-        unique_pairs: list[tuple[UUID, UUID]] = []
-        seen_pairs: set[tuple[UUID, UUID]] = set()
+        unique_pairs: list[tuple[int, int]] = []
+        seen_pairs: set[tuple[int, int]] = set()
         for item in body.items:
-            pair = (item.ecological_parameter_id, item.resource_catalog_id)
+            pair = (item.ecological_parameter_id, item.category_id)
             if pair in seen_pairs:
                 continue
             seen_pairs.add(pair)
@@ -341,12 +336,12 @@ class EcologyService:
         catalog_service = CatalogService(self._session)
         for parameter_id, resource_id in unique_pairs:
             self.get_parameter_required(parameter_id)
-            catalog_service.get_resource_required(resource_id)
+            catalog_service.get_required(resource_id)
 
         pair_filters = [
             sa.and_(
                 EcologicalParameterResourceMapping.ecological_parameter_id == parameter_id,
-                EcologicalParameterResourceMapping.resource_catalog_id == resource_id,
+                EcologicalParameterResourceMapping.category_id == resource_id,
             )
             for parameter_id, resource_id in unique_pairs
         ]
@@ -356,7 +351,7 @@ class EcologyService:
             )
         )
         existing_keys = {
-            (row.ecological_parameter_id, row.resource_catalog_id): row for row in existing_rows
+            (row.ecological_parameter_id, row.category_id): row for row in existing_rows
         }
 
         created_rows: list[EcologicalParameterResourceMapping] = []
@@ -364,9 +359,8 @@ class EcologyService:
             if (parameter_id, resource_id) in existing_keys:
                 continue
             row = EcologicalParameterResourceMapping(
-                id=new_uuid7(),
                 ecological_parameter_id=parameter_id,
-                resource_catalog_id=resource_id,
+                category_id=resource_id,
             )
             self._session.add(row)
             created_rows.append(row)
@@ -393,10 +387,10 @@ class EcologyService:
             existing_count=len(existing_out),
         )
 
-    def mapped_resource_catalog_ids(self, parameter_ids: list[UUID]) -> list[UUID]:
-        """返回生态参数集合映射到的资源目录主键；空映射返回空列表（禁止生成 IN ()）。"""
-        unique: list[UUID] = []
-        seen: set[UUID] = set()
+    def mapped_category_ids(self, parameter_ids: list[int]) -> list[int]:
+        """返回生态参数集合映射到的分类主键；空映射返回空列表。"""
+        unique: list[int] = []
+        seen: set[int] = set()
         for parameter_id in parameter_ids:
             if parameter_id in seen:
                 continue
@@ -407,14 +401,14 @@ class EcologyService:
             return []
         rows = list(
             self._session.scalars(
-                sa.select(EcologicalParameterResourceMapping.resource_catalog_id).where(
+                sa.select(EcologicalParameterResourceMapping.category_id).where(
                     EcologicalParameterResourceMapping.ecological_parameter_id.in_(unique)
                 )
             )
         )
         return list(dict.fromkeys(rows))
 
-    def delete_mapping(self, mapping_id: UUID) -> None:
+    def delete_mapping(self, mapping_id: int) -> None:
         row = self.get_mapping_required(mapping_id)
         self._session.delete(row)
         self._session.flush()

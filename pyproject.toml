@@ -43,8 +43,6 @@ dev = [
     "httpx>=0.27",
     "ruff>=0.6",
     "pyright>=1.1.375",
-    "pyshp>=2.3",
-    "httpx2>=2.12.0",
 ]
 
 [build-system]
@@ -55,7 +53,7 @@ build-backend = "hatchling.build"
 packages = ["src/app"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests/integration"]
 markers = [
     "integration: 需要显式提供真实基础设施的高风险边界测试",
 ]

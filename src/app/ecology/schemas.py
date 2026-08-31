@@ -2,7 +2,6 @@
 
 import re
 from datetime import datetime
-from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -21,7 +20,7 @@ def _validate_code(value: str) -> str:
 class EcologicalParameterCreate(BaseModel):
     code: str = Field(min_length=1, max_length=64, description="稳定业务编码，全局唯一")
     name: str = Field(min_length=1, max_length=255, description="生态参数显示名称")
-    parent_id: UUID | None = Field(default=None, description="父参数 ID；省略表示根节点")
+    parent_id: int | None = Field(default=None, description="父参数 ID；省略表示根节点")
     status: EcologicalParameterStatus = Field(
         default=EcologicalParameterStatus.ACTIVE,
         description="启用状态：ACTIVE 启用、DISABLED 停用",
@@ -51,7 +50,7 @@ class EcologicalParameterUpdate(BaseModel):
     name: str | None = Field(
         default=None, min_length=1, max_length=255, description="新显示名称；省略不改"
     )
-    parent_id: UUID | None = Field(
+    parent_id: int | None = Field(
         default=None, description="父参数：省略不改；UUID 改为该父级；null 升为根节点"
     )
     status: EcologicalParameterStatus | None = Field(default=None, description="启用状态；省略不改")
@@ -78,10 +77,10 @@ class EcologicalParameterUpdate(BaseModel):
 
 
 class EcologicalParameterResponse(BaseModel):
-    id: UUID = Field(description="生态参数 ID")
+    id: int = Field(description="生态参数 ID")
     code: str = Field(description="稳定业务编码")
     name: str = Field(description="显示名称")
-    parent_id: UUID | None = Field(description="父参数 ID；根节点为空")
+    parent_id: int | None = Field(description="父参数 ID；根节点为空")
     status: EcologicalParameterStatus = Field(description="启用状态：ACTIVE 启用、DISABLED 停用")
     sort_order: int = Field(description="同级排序")
     created_at: datetime = Field(description="创建时间（UTC，带时区）")
@@ -89,7 +88,7 @@ class EcologicalParameterResponse(BaseModel):
 
 
 class EcologicalParameterTreeNode(BaseModel):
-    id: UUID = Field(description="生态参数 ID")
+    id: int = Field(description="生态参数 ID")
     code: str = Field(description="稳定业务编码")
     name: str = Field(description="显示名称")
     status: EcologicalParameterStatus = Field(description="启用状态")
@@ -100,8 +99,8 @@ class EcologicalParameterTreeNode(BaseModel):
 
 
 class MappingCreate(BaseModel):
-    ecological_parameter_id: UUID = Field(description="生态参数 ID")
-    resource_catalog_id: UUID = Field(description="资源目录节点 ID")
+    ecological_parameter_id: int = Field(description="生态参数 ID")
+    category_id: int = Field(description="分类 ID")
 
 
 class MappingBatchCreate(BaseModel):
@@ -111,9 +110,9 @@ class MappingBatchCreate(BaseModel):
 
 
 class MappingResponse(BaseModel):
-    id: UUID = Field(description="映射 ID")
-    ecological_parameter_id: UUID = Field(description="生态参数 ID")
-    resource_catalog_id: UUID = Field(description="资源目录节点 ID")
+    id: int = Field(description="映射 ID")
+    ecological_parameter_id: int = Field(description="生态参数 ID")
+    category_id: int = Field(description="分类 ID")
     created_at: datetime = Field(description="创建时间（UTC，带时区）")
 
 

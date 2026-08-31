@@ -2,7 +2,6 @@
 
 from datetime import datetime
 from typing import Any
-from uuid import UUID
 
 from pydantic import BaseModel, Field
 
@@ -18,7 +17,7 @@ class JobEventItem(BaseModel):
 
 
 class JobResponse(BaseModel):
-    job_id: UUID = Field(description="任务 ID")
+    job_id: int = Field(description="任务 ID")
     job_type: JobType = Field(
         description="任务类型：RASTER_INGESTION 栅格入库、VECTOR_INGESTION 矢量入库、"
         "ATTACHMENT_INGESTION 附件入库、MONITORING_RUN 监测执行"
@@ -42,7 +41,7 @@ class JobResponse(BaseModel):
 
 
 class CancelJobResponse(BaseModel):
-    job_id: UUID = Field(description="任务 ID")
+    job_id: int = Field(description="任务 ID")
     status: JobStatus = Field(
         description=(
             "取消后的状态：排队任务为 CANCELLED；运行中为 CANCEL_REQUESTED，稍后在检查点收敛"

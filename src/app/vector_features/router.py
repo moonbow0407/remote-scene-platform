@@ -2,12 +2,11 @@
 
 from collections.abc import Iterator
 from typing import Annotated
-from uuid import UUID
 
 from fastapi import APIRouter, Depends, Path, Request
 from sqlalchemy.orm import Session
 
-from app.assets.enums import AssetType, AssetVersionStatus
+from app.assets.enums import AssetStatus, AssetType
 from app.assets.geometry import GeometryValidationError, geojson_to_wkt
 from app.assets.service import AssetService
 from app.db import session_scope
@@ -25,22 +24,20 @@ def _get_session(request: Request) -> Iterator[Session]:
 
 
 @router.post(
-    "/{asset_id}/versions/{version_id}/features/search",
+    "/{asset_id}/features/search",
     summary="检索矢量要素",
-    description="仅 READY 的矢量版本可用。范围必须是 EPSG:4326 的 Polygon 或 MultiPolygon。",
+    description="仅 READY 的矢量资产可用。范围必须是 EPSG:4326 的 Polygon 或 MultiPolygon。",
     response_model=Page[FeatureItem],
 )
 def search_features(
-    asset_id: Annotated[UUID, Path(description="逻辑资产 ID")],
-    version_id: Annotated[UUID, Path(description="资产版本 ID")],
+    asset_id: Annotated[int, Path(description="资产 ID")],
     body: FeatureSearchRequest,
     session: Annotated[Session, Depends(_get_session)],
 ) -> Page[FeatureItem]:
     assets = AssetService(session)
-    version = assets.get_version_required(asset_id, version_id)
-    if version.status is not AssetVersionStatus.READY:
-        raise validation_error(f"版本 {version_id} 未就绪，不能检索要素")
     asset = assets.get_asset_required(asset_id)
+    if asset.status is not AssetStatus.READY:
+        raise validation_error(f"资产 {asset_id} 未就绪，不能检索要素")
     if asset.asset_type is not AssetType.VECTOR:
         raise validation_error("只有矢量资产支持要素检索")
     try:
@@ -48,7 +45,7 @@ def search_features(
     except GeometryValidationError as exc:
         raise validation_error(str(exc)) from exc
     rows, total = VectorFeatureService(session).search(
-        version_id=version.id,
+        asset_id=asset.id,
         geometry_wkt=geometry_wkt,
         offset=(body.page - 1) * body.page_size,
         limit=body.page_size,
@@ -56,7 +53,7 @@ def search_features(
     items = [
         FeatureItem(
             id=feature.id,
-            asset_version_id=feature.asset_version_id,
+            asset_id=feature.asset_id,
             spatial_geojson=geojson,
             properties=feature.properties,
         )

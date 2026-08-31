@@ -20,7 +20,7 @@ depends_on: str | Sequence[str] | None = None
 def upgrade() -> None:
     op.create_table(
         "app_user",
-        sa.Column("id", sa.Uuid(), primary_key=True),
+        sa.Column("id", sa.Integer(), primary_key=True),
         sa.Column("username", sa.String(64), nullable=False, comment="登录名，全局唯一"),
         sa.Column("email", sa.String(255), nullable=False, comment="邮箱，规范化为小写后全局唯一"),
         sa.Column(

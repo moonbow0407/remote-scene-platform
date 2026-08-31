@@ -3,7 +3,6 @@
 import logging
 from collections.abc import Iterator
 from typing import Annotated
-from uuid import UUID
 
 import sqlalchemy as sa
 from fastapi import APIRouter, Depends, Path, Request
@@ -31,12 +30,12 @@ def _get_session(request: Request) -> Iterator[Session]:
     summary="查询任务",
     description=(
         "轮询入库或监测任务进度。首版不提供 SSE，请按此接口轮询。"
-        "NEEDS_INPUT 时到版本详情查看诊断并补 CRS。"
+        "管理页请轮询 GET /assets/{id}。本接口留给运维。"
     ),
     response_model=JobResponse,
 )
 def get_job(
-    job_id: Annotated[UUID, Path(description="任务 ID")],
+    job_id: Annotated[int, Path(description="任务 ID")],
     request: Request,
     session: Annotated[Session, Depends(_get_session)],
 ) -> JobResponse:
@@ -84,12 +83,12 @@ def get_job(
     response_model=CancelJobResponse,
 )
 def cancel_job(
-    job_id: Annotated[UUID, Path(description="任务 ID")],
+    job_id: Annotated[int, Path(description="任务 ID")],
     session: Annotated[Session, Depends(_get_session)],
 ) -> CancelJobResponse:
     """请求取消；排队任务立即取消，运行中任务在下一个处理步骤检查点停止。"""
     jobs = JobService(session)
     job = jobs.request_cancel(jobs.get_required(job_id))
-    if job.asset_version_id is not None and job.status is JobStatus.CANCELLED:
-        AssetService(session).mark_version_cancelled(job.asset_version_id)
+    if job.asset_id is not None and job.status is JobStatus.CANCELLED:
+        AssetService(session).mark_cancelled(job.asset_id)
     return CancelJobResponse(job_id=job.id, status=job.status)

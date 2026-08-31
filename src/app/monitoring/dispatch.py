@@ -14,8 +14,6 @@ Geo Worker 中的 `monitoring.execute_run` 任务认领执行。
   monitoring_run_input，执行方从数据库读取，避免两处快照漂移。
 """
 
-from uuid import UUID
-
 from sqlalchemy.orm import Session
 
 from app.jobs.enums import JobType
@@ -27,8 +25,8 @@ class JobRunDispatcher:
     """RunDispatcher 的生产实现：创建 Job 与 Outbox 事件，并回写 run.job_id。"""
 
     def dispatch(
-        self, session: Session, run: MonitoringRun, input_version_ids: list[UUID]
-    ) -> UUID | None:
+        self, session: Session, run: MonitoringRun, input_version_ids: list[int]
+    ) -> int | None:
         job, _event = JobService(session).create_job_with_outbox(
             job_type=JobType.MONITORING_RUN,
             payload={

@@ -20,11 +20,11 @@ from app.jobs.enums import JobStatus, JobType, OutboxStatus
 
 
 class Job(Base, TimestampMixin):
-    """处理任务。引用具体 asset_version，不能只引用逻辑资产。"""
+    """处理任务。入库任务引用具体 data_asset。"""
 
     __tablename__ = "job"
 
-    id: Mapped[Any] = mapped_column(sa.Uuid, primary_key=True)
+    id: Mapped[int] = mapped_column(sa.Integer, primary_key=True, autoincrement=True)
     job_type: Mapped[JobType] = mapped_column(
         sa.Enum(JobType, native_enum=False, length=32),
         nullable=False,
@@ -40,17 +40,15 @@ class Job(Base, TimestampMixin):
             "CANCEL_REQUESTED/CANCELLED/MISSED"
         ),
     )
-    # 业务参数：asset_version_id、upload_session_id 等
+    # 业务参数：asset_id、upload_session_id 等
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     attempt: Mapped[int] = mapped_column(sa.SmallInteger, nullable=False, default=0)
     max_attempts: Mapped[int] = mapped_column(sa.SmallInteger, nullable=False, default=4)
     # 最近一次错误的诊断（确定性/瞬时/缺输入），JSON 结构：{code, detail, transient}
     last_error: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
-    # 入库任务（RASTER/VECTOR/ATTACHMENT_INGESTION）的唯一目标版本；
-    # MONITORING_RUN 为 NULL——监测执行是多版本输入快照，权威关联在
-    # monitoring_run_input（Run 引用的版本行受 RESTRICT 保护，语义不弱化）
-    asset_version_id: Mapped[Any] = mapped_column(
-        sa.Uuid, ForeignKey("asset_version.id", ondelete="CASCADE"), nullable=True, index=True
+    # 入库任务指向具体资产；MONITORING_RUN 为 NULL，权威关联在 monitoring_run_input
+    asset_id: Mapped[int | None] = mapped_column(
+        sa.Integer, ForeignKey("data_asset.id", ondelete="CASCADE"), nullable=True, index=True
     )
     queued_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
@@ -80,9 +78,9 @@ class JobEvent(Base):
 
     __tablename__ = "job_event"
 
-    id: Mapped[Any] = mapped_column(sa.Uuid, primary_key=True)
-    job_id: Mapped[Any] = mapped_column(
-        sa.Uuid, ForeignKey("job.id", ondelete="CASCADE"), nullable=False
+    id: Mapped[int] = mapped_column(sa.Integer, primary_key=True, autoincrement=True)
+    job_id: Mapped[int] = mapped_column(
+        sa.Integer, ForeignKey("job.id", ondelete="CASCADE"), nullable=False
     )
     event_type: Mapped[str] = mapped_column(sa.String(64), nullable=False)
     from_status: Mapped[JobStatus | None] = mapped_column(
@@ -104,9 +102,9 @@ class OutboxEvent(Base, TimestampMixin):
 
     __tablename__ = "outbox_event"
 
-    id: Mapped[Any] = mapped_column(sa.Uuid, primary_key=True)
+    id: Mapped[int] = mapped_column(sa.Integer, primary_key=True, autoincrement=True)
     aggregate_type: Mapped[str] = mapped_column(sa.String(32), nullable=False)
-    aggregate_id: Mapped[Any] = mapped_column(sa.Uuid, nullable=False)
+    aggregate_id: Mapped[int] = mapped_column(sa.Integer, nullable=False)
     event_type: Mapped[str] = mapped_column(sa.String(64), nullable=False)
     # 投递载荷：{"task": 任务名, "args": [...], "job_id": ...}
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)

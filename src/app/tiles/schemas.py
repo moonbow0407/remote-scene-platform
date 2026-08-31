@@ -1,12 +1,10 @@
 """瓦片签发 API 模型。"""
 
-from uuid import UUID
-
 from pydantic import BaseModel, Field
 
 
 class TileUrlResponse(BaseModel):
-    asset_version_id: UUID = Field(description="资产版本 ID，瓦片绑定到该不可变版本")
+    asset_id: int = Field(description="资产 ID，瓦片绑定到该资产的 COG")
     tile_url_template: str = Field(
         description=(
             "XYZ 瓦片 URL 模板，含 {z}/{x}/{y} 与短期 token；必须经本平台网关，不要直连 TiTiler"

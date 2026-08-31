@@ -1,7 +1,6 @@
 """鉴权用例：登录、刷新、用户管理。授权判断只在本模块内完成。"""
 
 import logging
-from uuid import UUID
 
 import sqlalchemy as sa
 from sqlalchemy.exc import IntegrityError
@@ -12,7 +11,6 @@ from app.auth.password import dummy_password_hash, hash_password, verify_passwor
 from app.auth.tokens import IssuedTokens, TokenType, decode_token, issue_token_pair
 from app.context import ActorContext, ActorRole, now_utc
 from app.errors import conflict, forbidden, not_found, unauthorized
-from app.ids import new_uuid7
 from app.pagination import PageParams
 from app.settings import Settings
 
@@ -23,10 +21,10 @@ class AuthService:
     def __init__(self, session: Session) -> None:
         self._session = session
 
-    def get_user(self, user_id: UUID) -> User | None:
+    def get_user(self, user_id: int) -> User | None:
         return self._session.get(User, user_id)
 
-    def get_user_required(self, user_id: UUID) -> User:
+    def get_user_required(self, user_id: int) -> User:
         user = self.get_user(user_id)
         if user is None:
             raise not_found("用户", user_id)
@@ -50,7 +48,6 @@ class AuthService:
     ) -> User:
         now = now_utc()
         user = User(
-            id=new_uuid7(),
             username=username.strip(),
             email=email.strip().lower(),
             password_hash=hash_password(password),
@@ -69,7 +66,7 @@ class AuthService:
 
     def update_user(
         self,
-        user_id: UUID,
+        user_id: int,
         *,
         username: str | None = None,
         email: str | None = None,
@@ -92,7 +89,7 @@ class AuthService:
             raise conflict("USER_ALREADY_EXISTS", "用户名或邮箱已被使用") from exc
         return user
 
-    def set_user_status(self, user_id: UUID, *, is_active: bool, actor: ActorContext) -> User:
+    def set_user_status(self, user_id: int, *, is_active: bool, actor: ActorContext) -> User:
         user = self.get_user_required(user_id)
         # 避免管理员禁用自己后无法再管理账号
         if actor.actor_id == str(user.id) and not is_active:
@@ -138,7 +135,7 @@ class AuthService:
         # 重新签发 access 与 refresh（无服务端会话，旧 refresh 在过期前仍可使用）
         return self._issue_tokens(user, settings)
 
-    def require_self_or_admin(self, *, actor: ActorContext, user_id: UUID) -> None:
+    def require_self_or_admin(self, *, actor: ActorContext, user_id: int) -> None:
         if actor.role == ActorRole.ADMIN:
             return
         if actor.actor_id == str(user_id):

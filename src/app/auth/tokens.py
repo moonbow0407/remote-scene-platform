@@ -7,7 +7,6 @@
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
-from uuid import UUID
 
 import jwt
 
@@ -26,7 +25,7 @@ class TokenType(StrEnum):
 class TokenClaims:
     """已验证的令牌声明。role 仅 Access Token 携带，授权仍以数据库角色为准。"""
 
-    user_id: UUID
+    user_id: int
     token_type: TokenType
     role: ActorRole | None
     issued_at: datetime
@@ -53,7 +52,7 @@ def _require_secret(secret: str) -> str:
 
 def issue_access_token(
     *,
-    user_id: UUID,
+    user_id: int,
     role: ActorRole,
     secret: str,
     ttl_seconds: int,
@@ -72,7 +71,7 @@ def issue_access_token(
 
 def issue_refresh_token(
     *,
-    user_id: UUID,
+    user_id: int,
     secret: str,
     ttl_seconds: int,
     now: datetime | None = None,
@@ -90,7 +89,7 @@ def issue_refresh_token(
 
 def issue_token_pair(
     *,
-    user_id: UUID,
+    user_id: int,
     role: ActorRole,
     secret: str,
     access_ttl_seconds: int,
@@ -141,7 +140,7 @@ def decode_token(token: str, *, secret: str, expected_type: TokenType) -> TokenC
         raise unauthorized("AUTH_TOKEN_INVALID", "令牌类型不匹配")
 
     try:
-        user_id = UUID(str(payload["sub"]))
+        user_id = int(payload["sub"])
     except (ValueError, TypeError) as exc:
         raise unauthorized("AUTH_TOKEN_INVALID", "令牌主体无效") from exc
 
@@ -164,7 +163,7 @@ def decode_token(token: str, *, secret: str, expected_type: TokenType) -> TokenC
 
 def _encode(
     *,
-    user_id: UUID,
+    user_id: int,
     token_type: TokenType,
     secret: str,
     ttl_seconds: int,

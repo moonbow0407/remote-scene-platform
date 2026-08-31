@@ -2,7 +2,6 @@
 
 from collections.abc import Iterator
 from typing import Annotated
-from uuid import UUID
 
 from fastapi import APIRouter, Depends, Path, Query, Request
 from sqlalchemy.orm import Session
@@ -58,7 +57,7 @@ def list_parameters(
         EcologicalParameterStatus | None,
         Query(description="启用状态：ACTIVE / DISABLED；省略不过滤"),
     ] = None,
-    parent_id: Annotated[UUID | None, Query(description="父参数 ID；省略不过滤")] = None,
+    parent_id: Annotated[int | None, Query(description="父参数 ID；省略不过滤")] = None,
     code: Annotated[str | None, Query(max_length=64, description="业务编码精确匹配")] = None,
     root_only: Annotated[bool, Query(description="true 时只返回根节点")] = False,
 ) -> Page[EcologicalParameterResponse]:
@@ -88,7 +87,7 @@ def parameter_tree(
     response_model=EcologicalParameterResponse,
 )
 def get_parameter(
-    parameter_id: Annotated[UUID, Path(description="生态参数 ID")],
+    parameter_id: Annotated[int, Path(description="生态参数 ID")],
     service: Annotated[EcologyService, Depends(_get_service)],
 ) -> EcologicalParameterResponse:
     return _parameter_response(service.get_parameter_required(parameter_id))
@@ -114,7 +113,7 @@ def create_parameter(
     response_model=EcologicalParameterResponse,
 )
 def update_parameter(
-    parameter_id: Annotated[UUID, Path(description="生态参数 ID")],
+    parameter_id: Annotated[int, Path(description="生态参数 ID")],
     body: EcologicalParameterUpdate,
     service: Annotated[EcologyService, Depends(_get_service)],
 ) -> EcologicalParameterResponse:
@@ -129,7 +128,7 @@ def update_parameter(
     description="有子节点或仍被映射引用时会拒绝删除。",
 )
 def delete_parameter(
-    parameter_id: Annotated[UUID, Path(description="生态参数 ID")],
+    parameter_id: Annotated[int, Path(description="生态参数 ID")],
     service: Annotated[EcologyService, Depends(_get_service)],
 ) -> None:
     get_actor()
@@ -148,13 +147,13 @@ def delete_parameter(
 def list_mappings(
     params: Annotated[PageParams, Depends()],
     service: Annotated[EcologyService, Depends(_get_service)],
-    ecological_parameter_id: Annotated[UUID | None, Query(description="按生态参数过滤")] = None,
-    resource_catalog_id: Annotated[UUID | None, Query(description="按资源目录节点过滤")] = None,
+    ecological_parameter_id: Annotated[int | None, Query(description="按生态参数过滤")] = None,
+    category_id: Annotated[int | None, Query(description="按分类过滤")] = None,
 ) -> Page[MappingResponse]:
     page = service.list_mappings(
         params,
         ecological_parameter_id=ecological_parameter_id,
-        resource_catalog_id=resource_catalog_id,
+        category_id=category_id,
     )
     return Page.build([_mapping_response(item) for item in page.items], page.total, params)
 
@@ -178,7 +177,7 @@ def create_mappings_batch(
     response_model=MappingResponse,
 )
 def get_mapping(
-    mapping_id: Annotated[UUID, Path(description="映射 ID")],
+    mapping_id: Annotated[int, Path(description="映射 ID")],
     service: Annotated[EcologyService, Depends(_get_service)],
 ) -> MappingResponse:
     return _mapping_response(service.get_mapping_required(mapping_id))
@@ -204,7 +203,7 @@ def create_mapping(
     response_model=MappingResponse,
 )
 def update_mapping(
-    mapping_id: Annotated[UUID, Path(description="映射 ID")],
+    mapping_id: Annotated[int, Path(description="映射 ID")],
     body: MappingCreate,
     service: Annotated[EcologyService, Depends(_get_service)],
 ) -> MappingResponse:
@@ -218,7 +217,7 @@ def update_mapping(
     summary="删除生态映射",
 )
 def delete_mapping(
-    mapping_id: Annotated[UUID, Path(description="映射 ID")],
+    mapping_id: Annotated[int, Path(description="映射 ID")],
     service: Annotated[EcologyService, Depends(_get_service)],
 ) -> None:
     get_actor()

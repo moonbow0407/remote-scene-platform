@@ -27,7 +27,7 @@ MinIO 保存不可变对象，RabbitMQ 仅负责消息传递，TiTiler 由 Nginx
 | **Stage 1** 可运行骨架 | 已完成 | Python 3.12 / `uv` 依赖分组、API 与 Worker 分镜像、Compose、RFC 9457、分页、探针、结构化日志、Alembic `0001`（PostGIS） |
 | **Stage 2** 栅格纵向闭环 | 主体已落地 | 上传 → Outbox → Worker → COG → PostGIS → 瓦片令牌。关闭与否以 A2.1–A2.10 为准 |
 | **Stage 3** 矢量与附件 | 主体已落地 | 同一资产生命周期上 GeoJSON/Shapefile/GPKG 导入、附件 READY、要素空间检索、JSON Schema。关闭与否以 A3.1–A3.5 为准 |
-| **Stage 4** 目录与生态映射 | 已完成 | 资源目录树、卫星/传感器、生态参数与显式多对多映射；资产分类外键；检索按目录（含子树）/卫星/传感器/生态映射过滤。A4.1–A4.3 已在 Compose 上通过 |
+| **Stage 4** 目录与生态映射 | 已完成 | 分类与生态映射；后改为平铺分类（无树、无卫星/传感器表）。A4.1–A4.3 已在 Compose 上通过 |
 | **Stage 5** 监测计划与调度 | 主体已落地 | 计划/occurrence/执行/输入快照模型，RRULE 与固定间隔，Scheduler 互斥锁与停机补跑，增量资产选择，不可变输入快照；执行经 Job(MONITORING_RUN)+Outbox→RabbitMQ→Geo Worker 快照审计闭环。真实 Broker/Worker 全链路集成测试通过；A5.1–A5.5 人工验收待 Compose 执行 |
 | **Stage 6** 生命周期与可靠性 | 主体已落地 | 软删除/7 天恢复、异步物理清理与共享 blob 保护、MinIO 退避删除；任务租约/取消检查点/软硬时限/临时盘预检；队列、Job、Worker、存储指标与 Grafana 面板。关闭与否以 A6.1–A6.4 为准 |
 | **Stage 7** 迁移收口 | 进行中 | 57 项矩阵静态核对、OpenAPI RFC 9457 契约、发布/备份/排障与前端接入文档已落地；A7.2 干净 Compose 全量验收仍是关闭门禁 |
@@ -41,25 +41,22 @@ MinIO 保存不可变对象，RabbitMQ 仅负责消息传递，TiTiler 由 Nginx
 | 能力 | 路径 |
 | --- | --- |
 | 存活 / 就绪 | `GET /api/v1/healthz`、`GET /api/v1/readyz`（db/minio/rabbitmq/titiler） |
-| 创建分片上传会话 | `POST /api/v1/uploads/sessions`（预签名直传 MinIO，文件不经 API） |
-| 会话详情 / 补签分片 / 完成 / 中止 | `GET/POST /api/v1/uploads/sessions/{id}`… |
-| 资产与版本 | `GET /api/v1/assets/{id}`、`…/versions`、`…/versions/{vid}` |
-| 空间/目录检索 | `POST /api/v1/assets/search`（EPSG:4326 几何；目录含子树、卫星、传感器、生态映射） |
-| 更新资产分类 | `PATCH /api/v1/assets/{id}`（名称与目录/卫星/传感器外键；显式 null 清除） |
-| 缺 CRS 续跑 | `POST /api/v1/assets/{id}/versions/{vid}/inputs` |
-| 工件下载 | `GET /api/v1/assets/{id}/versions/{vid}/artifacts/{kind}/download-url` |
-| Job 轮询 | `GET /api/v1/jobs/{job_id}` |
+| 创建分片上传会话 | `POST /api/v1/uploads/sessions`（文件名+大小；服务端切分；预签名直传 MinIO） |
+| 会话详情 / 补签分片 / 完成 / 中止 | `GET/POST /api/v1/uploads/sessions/{id}`…；完成后轮询资产状态 |
+| 资产列表 | `GET /api/v1/assets`（名称、分类、类型、状态、分页；`deleted=true` 看回收站） |
+| 资产详情 / 更新 | `GET/PATCH /api/v1/assets/{id}`（名称、分类、采集时间） |
+| 空间检索 | `POST /api/v1/assets/search`（EPSG:4326 几何；分类精确过滤） |
+| 缺 CRS 续跑 | `POST /api/v1/assets/{id}/inputs` |
+| 原件下载 | `GET /api/v1/assets/{id}/download-url` |
+| Job 轮询 | `GET /api/v1/jobs/{job_id}`（运维；管理页请轮询资产） |
 | Job 取消 | `POST /api/v1/jobs/{job_id}/cancel`（运行中在步骤检查点收敛） |
-| 瓦片 URL | `GET /api/v1/assets/{id}/versions/{vid}/tile-url`（经 Nginx `/tiles/`，无令牌拒绝） |
-| 追加版本 | `POST /api/v1/uploads/sessions` 带 `asset_id` |
-| 要素检索 | `POST /api/v1/assets/{id}/versions/{vid}/features/search` |
-| JSON Schema | `GET/PUT /api/v1/assets/property-schemas` |
+| 瓦片 URL | `GET /api/v1/assets/{id}/tile-url`（经 Nginx `/tiles/`，无令牌拒绝） |
+| 要素检索 | `POST /api/v1/assets/{id}/features/search` |
 | 登录与用户 | `POST /api/v1/auth/login`、`/refresh`、`GET /api/v1/auth/me`；管理员 `/api/v1/users` |
-| 资源目录 | `GET/POST /api/v1/catalogs/resources`、`…/tree`、`…/{id}` |
-| 卫星 / 传感器 | `GET/POST /api/v1/catalogs/satellites`、`…/sensors`、`GET …/satellites/{id}/sensors` |
+| 分类 | `GET/POST /api/v1/categories`、`GET/PUT/DELETE /api/v1/categories/{id}` |
 | 生态参数 | `GET/POST /api/v1/ecology/parameters`、`…/tree`、`…/{id}` |
-| 生态↔资源映射 | `GET/POST/PUT /api/v1/ecology/mappings`、`POST …/mappings/batch` |
-| 资产删除与恢复 | `DELETE /api/v1/assets/{id}`、`POST …/assets/{id}/restore`（默认 7 天） |
+| 生态↔分类映射 | `GET/POST/PUT /api/v1/ecology/mappings`、`POST …/mappings/batch` |
+| 资产删除与恢复 | `DELETE /api/v1/assets/{id}`、`POST …/assets/{id}/restore`（默认 7 天回收站） |
 | 监测计划 | `GET/POST /api/v1/monitoring/plans`、`GET/PUT/DELETE …/plans/{id}` |
 | 计划暂停/恢复/手动触发 | `POST …/plans/{id}/pause`、`…/resume`、`…/trigger` |
 | 监测执行与输入快照 | `GET …/plans/{id}/runs`、`GET /api/v1/monitoring/runs/{id}`、`…/inputs`；执行方状态接缝 `POST …/runs/{id}/start|succeed|fail` |
@@ -68,7 +65,7 @@ Prometheus 指标 `GET /api/v1/metrics` 仅 Compose 内网抓取，Nginx 对外�
 指标覆盖 Outbox/RabbitMQ 积压、Job 状态/失败/处理时长、Worker 消费者/利用率、存储与
 清理积压；`observability` profile 自动加载 Grafana 运维面板。
 
-上传支持栅格 TIFF、矢量（GeoJSON / Shapefile ZIP / GeoPackage）和普通附件；创建会话可同时绑定资源目录、卫星与传感器。监测计划支持固定间隔（ISO 8601 duration 子集）与 RRULE（RFC 5545）调度：到期由独立 Scheduler 扫描派发（多实例经 PostgreSQL advisory lock 互斥，occurrence `(plan_id, scheduled_for)` 数据库唯一），停机只补跑最近一次、其余周期记 `MISSED`；每次执行按增量窗口（上次成功执行之后）选择 READY 资产版本并冻结不可变输入快照。执行派发与 Job(MONITORING_RUN)+Outbox 同事务创建，由 Dispatcher 投递、Geo Worker 中的监测执行任务认领，完成输入快照执行期审计后推进 Run 与 Job 终态。
+上传支持栅格 TIFF、矢量（GeoJSON / Shapefile ZIP / GeoPackage）和普通附件；类型按文件名后缀判断，名称默认用文件名。监测计划支持固定间隔（ISO 8601 duration 子集）与 RRULE（RFC 5545）调度：到期由独立 Scheduler 扫描派发（多实例经 PostgreSQL advisory lock 互斥，occurrence `(plan_id, scheduled_for)` 数据库唯一），停机只补跑最近一次、其余周期记 `MISSED`；每次执行按增量窗口选择 READY 资产并冻结输入快照。执行派发与 Job(MONITORING_RUN)+Outbox 同事务创建，由 Dispatcher 投递、Geo Worker 认领。
 
 ## 快速启动
 
@@ -87,13 +84,14 @@ curl -s http://localhost:9090/-/healthy            # Prometheus
 
 ## 本地开发
 
-进程内测试与静态检查不需要容器：
+静态检查不需要容器；`pytest` 只收集高风险集成测试，未提供基础设施环境变量时全部跳过：
 
 ```bash
 uv sync --all-groups            # 安装全部依赖组（api/worker/dev）
-uv run pytest                   # 进程内测试
 uv run ruff check .             # 静态检查
 uv run pyright                  # 类型检查
+# 集成测试需 APP_INTEGRATION_DATABASE_URL（以及 MinIO/RabbitMQ 相关变量）
+uv run pytest -m integration
 ```
 
 日常联调（WSL Docker Engine + 本机进程）：不要用 Windows 上的 PostgreSQL 15 / Redis / MySQL。
@@ -143,12 +141,12 @@ Docker Hub 直连超时时，可 `sudo ./scripts/apply-docker-wsl-network.sh` �
 ```
 src/app/
 ├── core 层职责当前分布在顶层：settings.py（配置）、db.py（会话/基类）、
-│   logging.py（结构化日志）、ids.py（UUIDv7）、errors.py（RFC 9457 错误）、
+│   logging.py（结构化日志）、ids.py（trace/令牌用 UUID）、errors.py（RFC 9457 错误）、
 │   pagination.py（分页基元）、checks.py（就绪检查）、context.py（ActorContext）
 ├── api/        # FastAPI 应用工厂、探针、指标、trace 中间件
-├── assets/     # 逻辑资产、不可变版本、检索
+├── assets/     # 资产（一行一份文件）、检索、软删除
 ├── uploads/    # MinIO Multipart 上传会话
-├── catalogs/   # 资源目录、卫星、传感器（Stage 4）
+├── catalogs/   # 平铺分类
 ├── ecology/    # 生态参数与资源映射（Stage 4）
 ├── monitoring/ # 监测计划、occurrence、执行与输入快照（Stage 5）
 ├── auth/       # JWT 用户鉴权接缝
@@ -166,7 +164,8 @@ docker/         # api/worker 镜像与 Nginx 配置
 prometheus/     # 抓取配置
 grafana/        # 自动配置的 Prometheus 数据源与 Stage 6 运维面板
 doc/            # 架构、阶段方案、迁移矩阵、验收基线
-tests/          # 进程内测试；集成测试随阶段补充
+tests/integration/  # 高风险边界集成测试（需显式基础设施）
+tests/fixtures/     # 人工验收夹具
 ```
 
 尚未关闭：Stage 2/3/5 的剩余人工场景、A6.1–A6.4 与 A7.2 干净环境全量重放；
@@ -178,7 +177,7 @@ AGENTS.md 约束不在首版范围，当前执行语义为输入快照执行期�
 
 ## 约定摘要
 
-- 核心主键 UUIDv7（`app.ids`）；时间 UTC 持久化、API 响应携带时区。
+- 核心主键整数自增；时间 UTC 持久化、API 响应携带时区。
 - 列表响应统一 `{items, total, page, page_size}`；错误统一 RFC 9457 + 业务 `code` + `trace_id`。
 - 日志为单行 JSON，`trace_id` 贯穿 API → Job → Worker。
 - Worker 任务必须幂等（至少一次投递）；瞬时错误可重试，确定性错误不得盲目重试。

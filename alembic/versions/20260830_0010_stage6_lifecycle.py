@@ -28,7 +28,7 @@ def upgrade() -> None:
             "purge_after", sa.DateTime(timezone=True), nullable=True, comment="恢复期结束时间"
         ),
     )
-    op.add_column("data_asset", sa.Column("deleted_by", sa.Uuid(), nullable=True))
+    op.add_column("data_asset", sa.Column("deleted_by", sa.Integer(), nullable=True))
     op.add_column(
         "data_asset",
         sa.Column("purge_attempts", sa.Integer(), nullable=False, server_default="0"),
@@ -45,10 +45,10 @@ def upgrade() -> None:
 
     op.create_table(
         "object_cleanup_task",
-        sa.Column("id", sa.Uuid(), primary_key=True),
+        sa.Column("id", sa.Integer(), primary_key=True),
         sa.Column("kind", sa.String(16), nullable=False, comment="BLOB/ARTIFACT"),
         sa.Column("object_key", sa.String(1024), nullable=False),
-        sa.Column("blob_id", sa.Uuid(), nullable=True),
+        sa.Column("blob_id", sa.Integer(), nullable=True),
         sa.Column("status", sa.String(16), nullable=False, server_default="PENDING"),
         sa.Column("attempts", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("claimed_at", sa.DateTime(timezone=True), nullable=True),

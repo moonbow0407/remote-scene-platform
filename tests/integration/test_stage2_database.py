@@ -1,4 +1,8 @@
-"""Stage 2 PostgreSQL 事务、认领和去重并发接缝。"""
+"""入库并发接缝：上传完成幂等、Job 认领一次、完成/中止竞争。
+
+需要显式提供 `APP_INTEGRATION_DATABASE_URL`（已 `alembic upgrade head`
+的 PostgreSQL/PostGIS）；未提供时跳过。
+"""
 
 import os
 from collections.abc import Iterator
@@ -10,11 +14,9 @@ import pytest
 import sqlalchemy as sa
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.assets.enums import AssetSource, AssetType, AssetVersionStatus
-from app.assets.models import AssetVersion, ObjectBlob
+from app.assets.enums import AssetType
 from app.assets.service import AssetService
 from app.db import make_session_factory, session_scope
-from app.ids import new_uuid7
 from app.jobs.enums import JobStatus, JobType
 from app.jobs.models import Job, JobEvent, OutboxEvent
 from app.jobs.service import JobService
@@ -34,14 +36,11 @@ pytestmark = [
 def factory() -> Iterator[sessionmaker[Session]]:
     assert DATABASE_URL is not None
     engine = sa.create_engine(DATABASE_URL, pool_pre_ping=True)
-    session_factory = make_session_factory(engine)
-    yield session_factory
+    yield make_session_factory(engine)
     engine.dispose()
 
 
 class _ExistingObjectMinio:
-    """模拟已在 MinIO 合并成功、数据库事务尚未提交的恢复场景。"""
-
     def list_parts(self, *, key: str, upload_id: str) -> list[dict[str, object]]:
         return []
 
@@ -49,30 +48,34 @@ class _ExistingObjectMinio:
         return {"size": 8, "etag": "fixture"}
 
 
-def test_concurrent_upload_completion_creates_one_version_and_job(
+def _pending_session(session: Session, *, asset_id: int, upload_id: str) -> int:
+    row = UploadSession(
+        asset_id=asset_id,
+        status=UploadSessionStatus.PENDING,
+        minio_upload_id=upload_id,
+        object_key=f"uploads/{uuid4()}/fixture.tif",
+        file_name="fixture.tif",
+        size_bytes=8,
+        part_count=1,
+        content_type="image/tiff",
+    )
+    session.add(row)
+    session.flush()
+    return row.id
+
+
+def test_concurrent_upload_completion_creates_one_job(
     factory: sessionmaker[Session],
 ) -> None:
-    session_id = new_uuid7()
     with session_scope(factory) as session:
         asset = AssetService(session).create_asset(
-            name="并发完成测试",
+            name="fixture.tif",
             asset_type=AssetType.RASTER,
-            source=AssetSource.UPLOAD,
+            original_file_name="fixture.tif",
+            size_bytes=8,
         )
         asset_id = asset.id
-        session.add(
-            UploadSession(
-                id=session_id,
-                asset_id=asset_id,
-                status=UploadSessionStatus.PENDING,
-                minio_upload_id="already-completed",
-                object_key=f"uploads/{session_id}/fixture.tif",
-                file_name="fixture.tif",
-                size_bytes=8,
-                part_count=1,
-                content_type="image/tiff",
-            )
-        )
+        session_id = _pending_session(session, asset_id=asset_id, upload_id="already-completed")
 
     minio = cast(MinioAdapter, _ExistingObjectMinio())
     settings = Settings()
@@ -88,21 +91,11 @@ def test_concurrent_upload_completion_creates_one_version_and_job(
     with session_scope(factory) as session:
         assert (
             session.scalar(
-                sa.select(sa.func.count())
-                .select_from(AssetVersion)
-                .where(AssetVersion.asset_id == asset_id)
+                sa.select(sa.func.count()).select_from(Job).where(Job.asset_id == asset_id)
             )
             == 1
         )
-        # 共享集成库中存在其他用例的任务与事件：只统计本资产版本派生的行
-        version_ids = sa.select(AssetVersion.id).where(AssetVersion.asset_id == asset_id)
-        job_ids = sa.select(Job.id).where(Job.asset_version_id.in_(version_ids))
-        assert (
-            session.scalar(
-                sa.select(sa.func.count()).select_from(Job).where(Job.id.in_(job_ids))
-            )
-            == 1
-        )
+        job_ids = sa.select(Job.id).where(Job.asset_id == asset_id)
         assert (
             session.scalar(
                 sa.select(sa.func.count())
@@ -119,20 +112,15 @@ def test_pending_job_is_claimed_once_under_duplicate_delivery(
     with session_scope(factory) as session:
         assets = AssetService(session)
         asset = assets.create_asset(
-            name="重复投递测试",
+            name="fixture.tif",
             asset_type=AssetType.RASTER,
-            source=AssetSource.UPLOAD,
-        )
-        version = assets.create_version(
-            asset_id=asset.id,
             original_file_name="fixture.tif",
             size_bytes=8,
-            status=AssetVersionStatus.VALIDATING,
         )
         job, _ = JobService(session).create_job_with_outbox(
             job_type=JobType.RASTER_INGESTION,
-            asset_version_id=version.id,
-            payload={"asset_version_id": str(version.id)},
+            asset_id=asset.id,
+            payload={"asset_id": str(asset.id)},
         )
         job_id = job.id
 
@@ -155,10 +143,7 @@ def test_pending_job_is_claimed_once_under_duplicate_delivery(
             session.scalar(
                 sa.select(sa.func.count())
                 .select_from(JobEvent)
-                .where(
-                    JobEvent.job_id == job_id,
-                    JobEvent.event_type == "JOB_CLAIMED",
-                )
+                .where(JobEvent.job_id == job_id, JobEvent.event_type == "JOB_CLAIMED")
             )
             == 1
         )
@@ -178,27 +163,15 @@ class _CompleteAbortMinio:
 def test_concurrent_complete_and_abort_do_not_diverge(
     factory: sessionmaker[Session],
 ) -> None:
-    session_id = new_uuid7()
     with session_scope(factory) as session:
         asset = AssetService(session).create_asset(
-            name="完成中止竞争",
+            name="fixture.tif",
             asset_type=AssetType.RASTER,
-            source=AssetSource.UPLOAD,
+            original_file_name="fixture.tif",
+            size_bytes=8,
         )
         asset_id = asset.id
-        session.add(
-            UploadSession(
-                id=session_id,
-                asset_id=asset_id,
-                status=UploadSessionStatus.PENDING,
-                minio_upload_id="upload-id",
-                object_key=f"uploads/{session_id}/fixture.tif",
-                file_name="fixture.tif",
-                size_bytes=8,
-                part_count=1,
-                content_type="image/tiff",
-            )
-        )
+        session_id = _pending_session(session, asset_id=asset_id, upload_id="upload-id")
 
     minio = cast(MinioAdapter, _CompleteAbortMinio())
     settings = Settings()
@@ -227,57 +200,16 @@ def test_concurrent_complete_and_abort_do_not_diverge(
     with session_scope(factory) as session:
         row = session.get(UploadSession, session_id)
         assert row is not None
-        version_count = int(
-            session.scalar(
-                sa.select(sa.func.count())
-                .select_from(AssetVersion)
-                .where(AssetVersion.asset_id == asset_id)
-            )
-            or 0
-        )
-        # 共享集成库中存在其他用例的任务：只统计本资产版本派生的 Job
         job_count = int(
             session.scalar(
-                sa.select(sa.func.count())
-                .select_from(Job)
-                .where(
-                    Job.asset_version_id.in_(
-                        sa.select(AssetVersion.id).where(AssetVersion.asset_id == asset_id)
-                    )
-                )
+                sa.select(sa.func.count()).select_from(Job).where(Job.asset_id == asset_id)
             )
             or 0
         )
         if row.status is UploadSessionStatus.COMPLETED:
-            assert version_count == 1
             assert job_count == 1
             assert any(item.startswith("abort_error:") for item in results)
         else:
             assert row.status is UploadSessionStatus.ABORTED
-            assert version_count == 0
             assert job_count == 0
             assert any(item.startswith("complete_error:") for item in results)
-
-
-def test_concurrent_blob_creation_reuses_one_row(factory: sessionmaker[Session]) -> None:
-    sha256 = uuid4().hex * 2
-    object_key = f"original/{sha256[:2]}/{sha256[2:4]}/{sha256}"
-
-    def create_reference() -> tuple[str, bool]:
-        with session_scope(factory) as session:
-            blob, created = AssetService(session).get_or_create_blob(
-                sha256=sha256,
-                size_bytes=8,
-                object_key=object_key,
-            )
-            return str(blob.id), created
-
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        results = list(executor.map(lambda _: create_reference(), range(2)))
-
-    assert results[0][0] == results[1][0]
-    assert sorted(created for _, created in results) == [False, True]
-    with session_scope(factory) as session:
-        blob = session.scalar(sa.select(ObjectBlob).where(ObjectBlob.sha256 == sha256))
-        assert blob is not None
-        assert blob.reference_count == 2

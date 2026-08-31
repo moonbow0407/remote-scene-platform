@@ -42,9 +42,9 @@ src/app/
 ├── settings.py / db.py / errors.py / ids.py / logging.py
 │   pagination.py / checks.py / context.py    # core 层
 ├── api/            # FastAPI 工厂、探针、指标、trace 中间件
-├── assets/         # 逻辑资产、不可变版本、栅格扩展、成果、检索
+├── assets/         # 资产（一行一份文件）、检索、软删除
 ├── uploads/        # MinIO Multipart 上传会话
-├── catalogs/       # 资源目录、卫星、传感器
+├── catalogs/       # 平铺分类
 ├── ecology/        # 生态参数与资源映射
 ├── auth/           # JWT 用户鉴权接缝
 ├── jobs/           # Job 状态机、事件、Outbox
@@ -56,10 +56,10 @@ src/app/
 ├── scheduler/      # 独立 Scheduler（Stage 5 实装评估循环）
 ├── recovery/       # Job 执行租约过期回收
 └── cleanup/        # Stage 6 过期资产与 MinIO 对象异步清理
-alembic/            # 0001–0010（0010 为 Stage 6 生命周期与运维索引）
+alembic/            # 0001–0011（0011 压平资产与分类）
 docker/             # api/worker 镜像与 Nginx
-tests/              # 进程内测试；integration 需显式基础设施
-tests/fixtures/     # 验收夹具
+tests/integration/  # 高风险边界集成测试，需显式基础设施
+tests/fixtures/     # 人工验收夹具
 doc/                # 总体架构、阶段方案、迁移矩阵、验收基线
 ```
 
@@ -84,8 +84,7 @@ doc/                # 总体架构、阶段方案、迁移矩阵、验收基线
 docker compose up -d --build
 ./scripts/dev.sh                # 日常：只起基础设施，本机跑 API/Dispatcher/Worker
 uv sync --all-groups
-uv run pytest
-uv run pytest -m integration    # 需显式提供真实基础设施
+uv run pytest -m integration    # 仅高风险集成测试；需显式提供真实基础设施
 uv run ruff check .
 uv run pyright
 uv run alembic upgrade head
@@ -114,9 +113,9 @@ uv run alembic upgrade head
 目标业务模块包括：
 
 - `core`：配置、数据库、错误、日志、`ActorContext`（当前为顶层文件）。
-- `assets`：逻辑资产、不可变版本、成果和检索。
+- `assets`：资产、检索、下载与软删除。
 - `uploads`：MinIO Multipart 上传会话。
-- `catalogs`：资源目录、卫星和传感器（Stage 4）。
+- `catalogs`：平铺业务分类。
 - `ecology`：生态参数及资源映射（Stage 4）。
 - `jobs`：Job 状态、事件和 Transactional Outbox。
 - `processing`：入库流水线与类型处理器。
@@ -134,19 +133,18 @@ uv run alembic upgrade head
 
 ### 3.4 遵守核心数据不变量
 
-- 核心主键使用 UUIDv7，数据库类型为 PostgreSQL `uuid`。
+- 核心主键使用整数自增（PostgreSQL `integer`）；trace / 租约令牌等非表主键仍可用随机 UUID。
 - 时间统一以 UTC 持久化，API 时间必须携带时区。
 - PostgreSQL/PostGIS 是唯一关系与空间数据库，不延续 MySQL/PostgreSQL 双库设计。
-- MinIO 保存不可变二进制对象；数据库保存对象键、内容哈希、业务状态和关系。
-- 逻辑资产、资产版本、类型扩展和成果必须分离。版本和成果不可覆盖历史输入。
-- Job、监测执行和计算结果必须引用具体 `asset_version`，不能只引用逻辑资产。
-- 栅格、矢量、附件按物理类型扩展；来源和业务分类使用字段、目录和标签，不为每个来源或业务分类创建资产表。
-- 高频检索和 STAC 核心元数据使用明确列；扩展属性使用 JSONB，并通过 JSON Schema 校验（Schema 校验随 Stage 3 落地）。
+- MinIO 保存二进制对象；数据库保存对象键、业务状态和关系。
+- 每次上传创建一条新资产，没有版本表。原件 / COG / 缩略图以对象键列挂在资产行上。
+- Job 与监测输入快照引用 `data_asset.id`。
+- 栅格、矢量、附件是物理类型字段；业务分类是平铺 `category`，不为来源再建资产表。
 - 栅格 COG 保留原始 CRS；用于检索和 API 的 footprint 统一为 EPSG:4326。
 - 空间请求只接受 EPSG:4326 GeoJSON `Polygon` 或 `MultiPolygon`。
 - 矢量原文件保留在 MinIO，要素几何进入 PostGIS，动态属性进入 JSONB。
 - 任务与资产关系使用关联表，禁止逗号分隔 ID、名称关联或无约束字符串外键。
-- 相同二进制可被多个逻辑资产引用；物理清理前必须确认引用计数为零。
+- 同一文件上传两次即存两份对象，不做内容寻址引用计数。
 
 违反这些不变量的请求或数据应尽早失败，不能用默认值或静默修正掩盖问题。
 
@@ -160,7 +158,7 @@ uv run alembic upgrade head
 - 状态转换必须通过明确的领域/Application 服务执行，并记录 Job 事件。禁止任意直接修改状态字段。
 - Scheduler 使用数据库锁防止重复调度，并为每个计划周期生成稳定唯一标识。
 - 停机恢复只补跑最近一次，其他错过周期标记为 `MISSED`，避免任务风暴。
-- 监测执行开始前必须冻结具体资产版本输入快照。
+- 监测执行开始前必须冻结具体资产输入快照。
 
 ### 3.6 遵守 API 契约
 
@@ -220,27 +218,27 @@ uv run alembic upgrade head
 ### 5.1 测试优先级
 
 1. 可重复的人工端到端场景是首版主要验收方式。
-2. PostgreSQL/PostGIS、MinIO、RabbitMQ/Celery、Outbox、TiTiler 和 Scheduler 等高风险边界编写集成测试。
-3. 状态机、重试分类、RRULE、增量时间窗、几何校验、渲染推断等复杂纯逻辑编写必要单元测试。
-4. 不为简单 CRUD、Pydantic 字段映射、ORM getter、薄封装或框架默认行为机械补单元测试。
-5. 不以覆盖率数字或测试数量代替真实风险验证。
+2. 仓库只保留少量高风险基础设施集成测试：PostgreSQL/PostGIS、MinIO、RabbitMQ/Celery、Outbox 与 Scheduler。
+3. 不为状态机、CRUD、Pydantic 映射、ORM、薄封装、框架默认行为或纯函数机械补单元测试。
+4. 不以覆盖率数字或测试数量代替真实风险验证。
 
-### 5.2 最高测试接缝
+### 5.2 保留的集成测试
 
-- 栅格主链路从创建上传会话开始，到资产 `READY`、成果存在且瓦片可读取结束。
-- 栅格纠错链路覆盖 `NEEDS_INPUT`、补充元数据和断点恢复。
-- 矢量链路覆盖上传、导入、空间查询和原文件下载。
-- 监测链路从到期计划开始，到增量选择和不可变输入快照结束。
-- 恢复链路覆盖 Broker 不可用、Outbox 积压、恢复投递和一次有效执行。
-- 删除链路覆盖软删除、七天恢复期、恢复和无引用对象清理。
+仓库只保留 `tests/integration/` 下的高风险接缝：
 
+- 入库并发：上传完成幂等、Job 重复投递认领、完成/中止竞争
+- 监测调度：PostGIS 空间选择、occurrence 并发唯一、暂停不派发、advisory lock、Run 与 Job+Outbox 同事务
+- 监测全链路：真实 Dispatcher/Worker 到终态，以及增量窗口第二次只选新资产
+- 删除清理：过期软删除后数据库行与 MinIO 对象物理移除
+
+栅格/矢量主链路、纠错续跑等仍以人工验收场景覆盖，不为此补进程内单测。
 测试应断言 API、数据库业务状态、对象和可观察结果，不断言内部方法调用次数等实现细节。
 
 ### 5.3 修改后的最低验证要求
 
 - 文档修改至少执行 Markdown 结构检查和 `git diff --check`。
-- Python 实现修改运行受影响的 `uv run pytest`；触及类型或导入时再跑 `uv run ruff check .` 与 `uv run pyright`。
-- 集成测试使用 `@pytest.mark.integration`，必须显式提供真实基础设施，禁止用 Mock 替代 PostGIS/MinIO/RabbitMQ 后声称链路已通过。
+- Python 实现修改触及类型或导入时跑 `uv run ruff check .` 与 `uv run pyright`；触及集成接缝时再跑 `uv run pytest -m integration`（需显式基础设施）。
+- 集成测试使用 `@pytest.mark.integration`，必须显式提供真实基础设施，禁止用 Mock 替代 PostGIS/MinIO/RabbitMQ 后声称链路已通过。未提供环境变量时应整体跳过，而不是改写为进程内单测。
 - 数据库设计修改必须验证 Alembic 在空库升级，并按风险验证降级或前向修复策略。
 - API 修改必须核对 OpenAPI、RFC 9457 错误和人工调用场景。
 - Worker 修改必须验证成功、确定性失败、瞬时重试和重复投递。
@@ -282,7 +280,7 @@ uv run alembic upgrade head
 - 是否遵守总体架构；如有偏差，偏差及原因是什么。
 - 数据、API、状态机或运行时边界发生了什么变化。
 - 若阶段状态发生变化，README 阶段表与已交付能力是否已同步更新。
-- 执行了哪些人工场景、集成测试、单元测试或静态检查。
+- 执行了哪些人工场景、集成测试或静态检查。
 - 仍有哪些未完成项、风险或受环境限制无法验证的部分。
 
 不得仅以“代码已写完”“测试通过”作为完成说明。完成的判定依据是当前阶段的退出条件和可观察业务结果。

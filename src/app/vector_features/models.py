@@ -14,13 +14,13 @@ from app.db import Base
 
 
 class VectorFeature(Base):
-    """某一资产版本导入的要素。几何统一为 EPSG:4326。"""
+    """某一资产导入的要素。几何统一为 EPSG:4326。"""
 
     __tablename__ = "vector_feature"
 
-    id: Mapped[Any] = mapped_column(sa.Uuid, primary_key=True)
-    asset_version_id: Mapped[Any] = mapped_column(
-        ForeignKey("asset_version.id", ondelete="CASCADE"), nullable=False, index=True
+    id: Mapped[int] = mapped_column(sa.Integer, primary_key=True, autoincrement=True)
+    asset_id: Mapped[int] = mapped_column(
+        ForeignKey("data_asset.id", ondelete="CASCADE"), nullable=False, index=True
     )
     geometry: Mapped[WKTElement] = mapped_column(
         Geometry(geometry_type="GEOMETRY", srid=4326), nullable=False

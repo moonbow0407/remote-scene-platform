@@ -4,8 +4,6 @@
 表名避开 PostgreSQL 保留字 `user`。
 """
 
-from uuid import UUID
-
 import sqlalchemy as sa
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -18,7 +16,7 @@ class User(Base, TimestampMixin):
 
     __tablename__ = "app_user"
 
-    id: Mapped[UUID] = mapped_column(sa.Uuid, primary_key=True)
+    id: Mapped[int] = mapped_column(sa.Integer, primary_key=True, autoincrement=True)
     username: Mapped[str] = mapped_column(
         sa.String(64), nullable=False, unique=True, comment="登录名，全局唯一"
     )

@@ -14,7 +14,6 @@ import logging
 import signal
 import time
 from types import FrameType
-from uuid import UUID
 
 import sqlalchemy as sa
 from sqlalchemy.exc import SQLAlchemyError
@@ -108,7 +107,7 @@ def main() -> None:
 
                 with session_scope(factory) as session:
                     repo = OutboxRepository(session)
-                    job_ids: list[UUID] = []
+                    job_ids: list[int] = []
                     for event in published:
                         # 重新读取当前行（上一事务已提交认领状态）
                         row = session.get(OutboxEvent, event.id)

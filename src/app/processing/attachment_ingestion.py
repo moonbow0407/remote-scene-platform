@@ -1,16 +1,16 @@
-"""普通附件入库：校验 → 哈希去重 → 登记扩展 → READY，不触发地理处理。"""
+"""普通附件入库：校验 → 绑定原件 → 登记扩展 → READY，不触发地理处理。"""
 
 from __future__ import annotations
 
 import logging
 from typing import Any
 
-from app.assets.enums import ArtifactKind, AssetVersionStatus
+from app.assets.enums import AssetStatus
 from app.assets.service import AssetService
 from app.db import session_scope
 from app.jobs.enums import JobStatus
 from app.jobs.service import JobService
-from app.processing.blob import hash_dedup_original, resolve_input_object
+from app.processing.blob import bind_original, resolve_input_object
 from app.processing.common import (
     IngestionContext,
     cancellation_checkpoint,
@@ -38,7 +38,7 @@ class AttachmentIngestion:
             cancellation_checkpoint(ctx, self._engine)
             detected, mime = self._step_validate(ctx)
             cancellation_checkpoint(ctx, self._engine)
-            hash_dedup_original(minio=self._minio, engine=self._engine, ctx=ctx, content_type=mime)
+            bind_original(minio=self._minio, engine=self._engine, ctx=ctx)
             cancellation_checkpoint(ctx, self._engine)
             self._step_register(ctx, detected, mime)
             cancellation_checkpoint(ctx, self._engine)
@@ -47,7 +47,6 @@ class AttachmentIngestion:
             cleanup_tmp_dir(ctx.tmp_dir)
 
     def _step_validate(self, ctx: IngestionContext) -> tuple[DetectedKind, str]:
-        # 输入对象按 resolve_input_object 统一解析：哈希去重删除上传源后，重试改用 canonical blob
         key, expected_size = resolve_input_object(engine=self._engine, ctx=ctx)
         stat = self._minio.head_object(key=key)
         if stat is None and key != ctx.source_object_key:
@@ -57,7 +56,7 @@ class AttachmentIngestion:
         if stat is None:
             raise DeterministicError(
                 "SOURCE_OBJECT_MISSING",
-                f"输入对象不存在：canonical/blob 与上传源 {ctx.source_object_key} 均不可访问",
+                f"输入对象不存在：{ctx.source_object_key}",
             )
         if stat["size"] != expected_size:
             raise DeterministicError(
@@ -76,32 +75,28 @@ class AttachmentIngestion:
     def _step_register(self, ctx: IngestionContext, detected: DetectedKind, mime: str) -> None:
         with session_scope(self._engine) as session:
             assets = AssetService(session)
-            version = assets.get_version_by_id(ctx.version_id)
-            assert version is not None
-            assets.upsert_attachment_ext(
-                ctx.version_id,
+            asset = assets.get_asset_by_id(ctx.asset_id)
+            assert asset is not None
+            assets.update_fields(
+                ctx.asset_id,
                 mime_type=mime,
                 detected_format=detected.value,
-                original_file_name=version.original_file_name,
             )
-            if version.status is AssetVersionStatus.VALIDATING:
-                assets.set_version_status(version, AssetVersionStatus.PROCESSING)
+            if asset.status is AssetStatus.VALIDATING:
+                assets.set_status(asset, AssetStatus.PROCESSING)
 
     def _step_finalize(self, ctx: IngestionContext) -> None:
         with session_scope(self._engine) as session:
             assets = AssetService(session)
             jobs = JobService(session)
-            version = assets.get_version_by_id(ctx.version_id)
-            assert version is not None
-            original = assets.find_artifact(ctx.version_id, ArtifactKind.ORIGINAL)
-            ext = assets.get_attachment_ext(ctx.version_id)
-            if original is None or ext is None:
-                raise DeterministicError("ARTIFACTS_MISSING", "完成前缺少原文件工件或附件扩展")
-            cog = assets.find_artifact(ctx.version_id, ArtifactKind.COG)
-            if cog is not None:
+            asset = assets.get_asset_by_id(ctx.asset_id)
+            assert asset is not None
+            if asset.original_object_key is None or asset.mime_type is None:
+                raise DeterministicError("ARTIFACTS_MISSING", "完成前缺少原件或附件元数据")
+            if asset.cog_object_key is not None:
                 raise DeterministicError("UNEXPECTED_GEO_OUTPUT", "附件入库不得产生 COG")
-            if version.status is not AssetVersionStatus.READY:
-                assets.set_version_status(version, AssetVersionStatus.READY)
+            if asset.status is not AssetStatus.READY:
+                assets.set_status(asset, AssetStatus.READY)
             job = jobs.get(ctx.job_id)
             if job is not None and job.status is not JobStatus.SUCCEEDED:
                 jobs.transition(job, JobStatus.SUCCEEDED, event_type="JOB_SUCCEEDED")

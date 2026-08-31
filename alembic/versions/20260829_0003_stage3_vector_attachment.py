@@ -25,7 +25,7 @@ def upgrade() -> None:
         "vector_asset_version",
         sa.Column(
             "asset_version_id",
-            sa.Uuid(),
+            sa.Integer(),
             sa.ForeignKey(
                 "asset_version.id",
                 ondelete="CASCADE",
@@ -53,7 +53,7 @@ def upgrade() -> None:
         "attachment_asset_version",
         sa.Column(
             "asset_version_id",
-            sa.Uuid(),
+            sa.Integer(),
             sa.ForeignKey(
                 "asset_version.id",
                 ondelete="CASCADE",
@@ -68,10 +68,10 @@ def upgrade() -> None:
 
     op.create_table(
         "vector_feature",
-        sa.Column("id", sa.Uuid(), primary_key=True),
+        sa.Column("id", sa.Integer(), primary_key=True),
         sa.Column(
             "asset_version_id",
-            sa.Uuid(),
+            sa.Integer(),
             sa.ForeignKey(
                 "asset_version.id",
                 ondelete="CASCADE",
@@ -92,7 +92,7 @@ def upgrade() -> None:
 
     op.create_table(
         "property_schema",
-        sa.Column("id", sa.Uuid(), primary_key=True),
+        sa.Column("id", sa.Integer(), primary_key=True),
         sa.Column("name", sa.String(128), nullable=False),
         sa.Column("asset_type", sa.String(16), nullable=True),
         sa.Column("schema", JSONB, nullable=False),

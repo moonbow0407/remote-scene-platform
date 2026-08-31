@@ -20,12 +20,12 @@ depends_on: str | Sequence[str] | None = None
 def upgrade() -> None:
     op.create_table(
         "resource_catalog",
-        sa.Column("id", sa.Uuid(), primary_key=True),
+        sa.Column("id", sa.Integer(), primary_key=True),
         sa.Column("code", sa.String(64), nullable=False, comment="稳定业务编码，全局唯一"),
         sa.Column("name", sa.String(255), nullable=False, comment="显示名称"),
         sa.Column(
             "parent_id",
-            sa.Uuid(),
+            sa.Integer(),
             sa.ForeignKey(
                 "resource_catalog.id",
                 ondelete="RESTRICT",
@@ -36,7 +36,7 @@ def upgrade() -> None:
         ),
         sa.Column("status", sa.String(16), nullable=False, comment="ACTIVE/DISABLED"),
         sa.Column("sort_order", sa.Integer(), nullable=False, server_default="0"),
-        sa.Column("created_by", sa.Uuid(), nullable=True, comment="鉴权预留：创建者"),
+        sa.Column("created_by", sa.Integer(), nullable=True, comment="鉴权预留：创建者"),
         sa.Column(
             "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
         ),
@@ -53,12 +53,12 @@ def upgrade() -> None:
 
     op.create_table(
         "satellite",
-        sa.Column("id", sa.Uuid(), primary_key=True),
+        sa.Column("id", sa.Integer(), primary_key=True),
         sa.Column("code", sa.String(64), nullable=False, comment="稳定业务编码，全局唯一"),
         sa.Column("name", sa.String(255), nullable=False, comment="显示名称"),
         sa.Column("status", sa.String(16), nullable=False, comment="ACTIVE/DISABLED"),
         sa.Column("sort_order", sa.Integer(), nullable=False, server_default="0"),
-        sa.Column("created_by", sa.Uuid(), nullable=True, comment="鉴权预留：创建者"),
+        sa.Column("created_by", sa.Integer(), nullable=True, comment="鉴权预留：创建者"),
         sa.Column(
             "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
         ),
@@ -71,12 +71,12 @@ def upgrade() -> None:
 
     op.create_table(
         "sensor",
-        sa.Column("id", sa.Uuid(), primary_key=True),
+        sa.Column("id", sa.Integer(), primary_key=True),
         sa.Column("code", sa.String(64), nullable=False, comment="稳定业务编码，全局唯一"),
         sa.Column("name", sa.String(255), nullable=False, comment="显示名称"),
         sa.Column(
             "satellite_id",
-            sa.Uuid(),
+            sa.Integer(),
             sa.ForeignKey(
                 "satellite.id", ondelete="RESTRICT", name="fk_sensor_satellite_id_satellite"
             ),
@@ -85,7 +85,7 @@ def upgrade() -> None:
         ),
         sa.Column("status", sa.String(16), nullable=False, comment="ACTIVE/DISABLED"),
         sa.Column("sort_order", sa.Integer(), nullable=False, server_default="0"),
-        sa.Column("created_by", sa.Uuid(), nullable=True, comment="鉴权预留：创建者"),
+        sa.Column("created_by", sa.Integer(), nullable=True, comment="鉴权预留：创建者"),
         sa.Column(
             "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
         ),
@@ -100,12 +100,12 @@ def upgrade() -> None:
 
     op.create_table(
         "ecological_parameter",
-        sa.Column("id", sa.Uuid(), primary_key=True),
+        sa.Column("id", sa.Integer(), primary_key=True),
         sa.Column("code", sa.String(64), nullable=False, comment="稳定业务编码，全局唯一"),
         sa.Column("name", sa.String(255), nullable=False, comment="显示名称"),
         sa.Column(
             "parent_id",
-            sa.Uuid(),
+            sa.Integer(),
             sa.ForeignKey(
                 "ecological_parameter.id",
                 ondelete="RESTRICT",
@@ -116,7 +116,7 @@ def upgrade() -> None:
         ),
         sa.Column("status", sa.String(16), nullable=False, comment="ACTIVE/DISABLED"),
         sa.Column("sort_order", sa.Integer(), nullable=False, server_default="0"),
-        sa.Column("created_by", sa.Uuid(), nullable=True, comment="鉴权预留：创建者"),
+        sa.Column("created_by", sa.Integer(), nullable=True, comment="鉴权预留：创建者"),
         sa.Column(
             "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
         ),
@@ -135,10 +135,10 @@ def upgrade() -> None:
 
     op.create_table(
         "ecological_parameter_resource_mapping",
-        sa.Column("id", sa.Uuid(), primary_key=True),
+        sa.Column("id", sa.Integer(), primary_key=True),
         sa.Column(
             "ecological_parameter_id",
-            sa.Uuid(),
+            sa.Integer(),
             sa.ForeignKey(
                 "ecological_parameter.id",
                 ondelete="RESTRICT",
@@ -149,7 +149,7 @@ def upgrade() -> None:
         ),
         sa.Column(
             "resource_catalog_id",
-            sa.Uuid(),
+            sa.Integer(),
             sa.ForeignKey(
                 "resource_catalog.id",
                 ondelete="RESTRICT",
@@ -182,20 +182,20 @@ def upgrade() -> None:
         "data_asset",
         sa.Column(
             "resource_catalog_id",
-            sa.Uuid(),
+            sa.Integer(),
             nullable=True,
             comment="业务分类：资源目录主键；禁止名称/code 软引用",
         ),
     )
     op.add_column(
         "data_asset",
-        sa.Column("satellite_id", sa.Uuid(), nullable=True, comment="平台：卫星主键"),
+        sa.Column("satellite_id", sa.Integer(), nullable=True, comment="平台：卫星主键"),
     )
     op.add_column(
         "data_asset",
         sa.Column(
             "sensor_id",
-            sa.Uuid(),
+            sa.Integer(),
             nullable=True,
             comment="仪器：传感器主键；须属于 satellite_id",
         ),

@@ -15,17 +15,16 @@ from pyproj import CRS, Transformer
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import transform as shp_transform
 
-from app.assets.enums import AssetVersionStatus
+from app.assets.enums import AssetStatus
 from app.assets.property_schema import (
     accumulate_property_schema,
     property_schema_from_collected,
 )
 from app.assets.service import AssetService
 from app.db import session_scope
-from app.ids import new_uuid7
 from app.jobs.enums import JobStatus
 from app.jobs.service import JobService
-from app.processing.blob import ensure_source_local, hash_dedup_original, resolve_input_object
+from app.processing.blob import bind_original, ensure_source_local, resolve_input_object
 from app.processing.common import (
     IngestionContext,
     cancellation_checkpoint,
@@ -65,12 +64,7 @@ class VectorIngestion:
             cancellation_checkpoint(ctx, self._engine)
             kind = self._step_validate(ctx)
             cancellation_checkpoint(ctx, self._engine)
-            hash_dedup_original(
-                minio=self._minio,
-                engine=self._engine,
-                ctx=ctx,
-                content_type=_CONTENT_TYPES[kind],
-            )
+            bind_original(minio=self._minio, engine=self._engine, ctx=ctx)
             cancellation_checkpoint(ctx, self._engine)
             self._step_import(ctx, kind)
             cancellation_checkpoint(ctx, self._engine)
@@ -121,20 +115,18 @@ class VectorIngestion:
         ensure_source_local(minio=self._minio, engine=self._engine, ctx=ctx)
         with session_scope(self._engine) as session:
             assets = AssetService(session)
-            ext = assets.get_vector_ext(ctx.version_id)
-            user_crs = ext.user_crs if ext is not None else None
-            existing_count = VectorFeatureService(session).count_for_version(ctx.version_id)
+            asset = assets.get_asset_by_id(ctx.asset_id)
+            assert asset is not None
+            user_crs = asset.user_crs
+            existing_count = VectorFeatureService(session).count_for_asset(ctx.asset_id)
             if (
-                ext is not None
-                and ext.feature_count is not None
-                and existing_count == ext.feature_count
-                and ext.footprint is not None
+                asset.feature_count is not None
+                and existing_count == asset.feature_count
+                and asset.footprint is not None
             ):
-                version = assets.get_version_by_id(ctx.version_id)
-                assert version is not None
-                if version.status is AssetVersionStatus.VALIDATING:
-                    assets.set_version_status(version, AssetVersionStatus.PROCESSING)
-                logger.info("矢量要素已存在，跳过导入", extra={"version_id": str(ctx.version_id)})
+                if asset.status is AssetStatus.VALIDATING:
+                    assets.set_status(asset, AssetStatus.PROCESSING)
+                logger.info("矢量要素已存在，跳过导入", extra={"asset_id": str(ctx.asset_id)})
                 return
 
         source_crs, features = iter_vector_features(ctx.source_path, kind, user_crs=user_crs)
@@ -142,10 +134,10 @@ class VectorIngestion:
         with session_scope(self._engine) as session:
             assets = AssetService(session)
             feature_svc = VectorFeatureService(session)
-            feature_svc.delete_version_features(ctx.version_id)
+            feature_svc.delete_asset_features(ctx.asset_id)
             imported, bounds, schema, geometry_type = _import_projected_features(
                 feature_svc,
-                ctx.version_id,
+                ctx.asset_id,
                 features,
                 projector,
             )
@@ -154,36 +146,35 @@ class VectorIngestion:
                 f"POLYGON(({min_x!r} {min_y!r}, {max_x!r} {min_y!r}, "
                 f"{max_x!r} {max_y!r}, {min_x!r} {max_y!r}, {min_x!r} {min_y!r}))"
             )
-            assets.upsert_vector_ext(
-                ctx.version_id,
+            assets.update_fields(
+                ctx.asset_id,
                 crs=source_crs,
                 geometry_type=geometry_type,
                 feature_count=imported,
                 native_format=kind.value,
-                property_schema=schema,
+                vector_property_schema=schema,
                 footprint=WKTElement(footprint, srid=4326),
                 min_x=min_x,
                 min_y=min_y,
                 max_x=max_x,
                 max_y=max_y,
             )
-            version = assets.get_version_by_id(ctx.version_id)
+            version = assets.get_asset_by_id(ctx.asset_id)
             assert version is not None
-            if version.status is AssetVersionStatus.VALIDATING:
-                assets.set_version_status(version, AssetVersionStatus.PROCESSING)
+            if version.status is AssetStatus.VALIDATING:
+                assets.set_status(version, AssetStatus.PROCESSING)
 
     def _step_finalize(self, ctx: IngestionContext) -> None:
         with session_scope(self._engine) as session:
             assets = AssetService(session)
             jobs = JobService(session)
-            version = assets.get_version_by_id(ctx.version_id)
-            assert version is not None
-            ext = assets.get_vector_ext(ctx.version_id)
-            count = VectorFeatureService(session).count_for_version(ctx.version_id)
-            if ext is None or ext.feature_count is None or count != ext.feature_count:
+            asset = assets.get_asset_by_id(ctx.asset_id)
+            assert asset is not None
+            count = VectorFeatureService(session).count_for_asset(ctx.asset_id)
+            if asset.feature_count is None or count != asset.feature_count:
                 raise DeterministicError("FEATURES_MISSING", "完成前要素数与登记不一致")
-            if version.status is not AssetVersionStatus.READY:
-                assets.set_version_status(version, AssetVersionStatus.READY)
+            if asset.status is not AssetStatus.READY:
+                assets.set_status(asset, AssetStatus.READY)
             job = jobs.get(ctx.job_id)
             if job is not None and job.status is not JobStatus.SUCCEEDED:
                 jobs.transition(job, JobStatus.SUCCEEDED, event_type="JOB_SUCCEEDED")
@@ -202,7 +193,7 @@ def _make_projector(source_crs: str) -> Any:
 
 def _import_projected_features(
     feature_svc: VectorFeatureService,
-    version_id: Any,
+    asset_id: Any,
     features: Iterator[tuple[BaseGeometry, dict[str, Any]]],
     projector: Any,
 ) -> tuple[int, tuple[float, float, float, float], list[dict[str, Any]], str]:
@@ -226,8 +217,7 @@ def _import_projected_features(
             geom_types.add(out.geom_type)
             batch.append(
                 VectorFeature(
-                    id=new_uuid7(),
-                    asset_version_id=version_id,
+                    asset_id=asset_id,
                     geometry=WKTElement(shapely_to_wkt(out), srid=4326),
                     properties=props,
                 )

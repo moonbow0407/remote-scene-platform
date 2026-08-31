@@ -2,7 +2,6 @@
 
 import re
 from datetime import datetime
-from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -55,7 +54,7 @@ class TokenResponse(BaseModel):
 class UserPublic(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
-    id: UUID = Field(description="用户 ID")
+    id: int = Field(description="用户 ID")
     username: str = Field(description="登录用户名")
     email: str = Field(description="邮箱")
     role: ActorRole = Field(description="角色：ADMIN 管理员、USER 普通用户")

@@ -27,7 +27,7 @@ JSONB = sa.dialects.postgresql.JSONB
 def upgrade() -> None:
     op.create_table(
         "object_blob",
-        sa.Column("id", sa.Uuid(), primary_key=True),
+        sa.Column("id", sa.Integer(), primary_key=True),
         sa.Column("sha256", sa.String(64), nullable=False),
         sa.Column("object_key", sa.String(1024), nullable=False),
         sa.Column("size_bytes", sa.BigInteger(), nullable=False),
@@ -43,7 +43,7 @@ def upgrade() -> None:
 
     op.create_table(
         "data_asset",
-        sa.Column("id", sa.Uuid(), primary_key=True),
+        sa.Column("id", sa.Integer(), primary_key=True),
         sa.Column("name", sa.String(255), nullable=False),
         sa.Column(
             "asset_type",
@@ -58,8 +58,8 @@ def upgrade() -> None:
             comment="来源：UPLOAD/SATELLITE/EXTERNAL_IMPORT",
         ),
         sa.Column("properties", JSONB, nullable=False, server_default="{}"),
-        sa.Column("owner_id", sa.Uuid(), nullable=True, comment="鉴权预留，首版为 NULL"),
-        sa.Column("created_by", sa.Uuid(), nullable=True, comment="鉴权预留，首版为 NULL"),
+        sa.Column("owner_id", sa.Integer(), nullable=True, comment="鉴权预留，首版为 NULL"),
+        sa.Column("created_by", sa.Integer(), nullable=True, comment="鉴权预留，首版为 NULL"),
         sa.Column(
             "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
         ),
@@ -71,10 +71,10 @@ def upgrade() -> None:
 
     op.create_table(
         "asset_version",
-        sa.Column("id", sa.Uuid(), primary_key=True),
+        sa.Column("id", sa.Integer(), primary_key=True),
         sa.Column(
             "asset_id",
-            sa.Uuid(),
+            sa.Integer(),
             sa.ForeignKey(
                 "data_asset.id", ondelete="CASCADE", name="fk_asset_version_asset_id_data_asset"
             ),
@@ -94,7 +94,7 @@ def upgrade() -> None:
         sa.Column("diagnostics", JSONB, nullable=True),
         sa.Column(
             "blob_id",
-            sa.Uuid(),
+            sa.Integer(),
             sa.ForeignKey(
                 "object_blob.id", ondelete="RESTRICT", name="fk_asset_version_blob_id_object_blob"
             ),
@@ -113,7 +113,7 @@ def upgrade() -> None:
     op.create_index("ix_asset_version_blob_id", "asset_version", ["blob_id"])
 
     # 环形外键：当前版本指针
-    op.add_column("data_asset", sa.Column("current_version_id", sa.Uuid(), nullable=True))
+    op.add_column("data_asset", sa.Column("current_version_id", sa.Integer(), nullable=True))
     op.create_foreign_key(
         "fk_data_asset_current_version_id_asset_version",
         "data_asset",
@@ -127,7 +127,7 @@ def upgrade() -> None:
         "raster_asset_version",
         sa.Column(
             "asset_version_id",
-            sa.Uuid(),
+            sa.Integer(),
             sa.ForeignKey(
                 "asset_version.id",
                 ondelete="CASCADE",
@@ -159,10 +159,10 @@ def upgrade() -> None:
 
     op.create_table(
         "asset_artifact",
-        sa.Column("id", sa.Uuid(), primary_key=True),
+        sa.Column("id", sa.Integer(), primary_key=True),
         sa.Column(
             "asset_version_id",
-            sa.Uuid(),
+            sa.Integer(),
             sa.ForeignKey(
                 "asset_version.id", ondelete="CASCADE", name="fk_artifact_version_id_asset_version"
             ),
@@ -181,10 +181,10 @@ def upgrade() -> None:
 
     op.create_table(
         "upload_session",
-        sa.Column("id", sa.Uuid(), primary_key=True),
+        sa.Column("id", sa.Integer(), primary_key=True),
         sa.Column(
             "asset_id",
-            sa.Uuid(),
+            sa.Integer(),
             sa.ForeignKey(
                 "data_asset.id", ondelete="CASCADE", name="fk_upload_session_asset_id_data_asset"
             ),
@@ -197,7 +197,7 @@ def upgrade() -> None:
         sa.Column("size_bytes", sa.BigInteger(), nullable=False),
         sa.Column("part_count", sa.Integer(), nullable=False),
         sa.Column("content_type", sa.String(128), nullable=True),
-        sa.Column("completed_version_id", sa.Uuid(), nullable=True),
+        sa.Column("completed_version_id", sa.Integer(), nullable=True),
         sa.Column("completed_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("last_error", JSONB, nullable=True),
         sa.Column(
@@ -211,7 +211,7 @@ def upgrade() -> None:
 
     op.create_table(
         "job",
-        sa.Column("id", sa.Uuid(), primary_key=True),
+        sa.Column("id", sa.Integer(), primary_key=True),
         sa.Column(
             "job_type", sa.String(32), nullable=False, comment="任务类型，首版 RASTER_INGESTION"
         ),
@@ -227,7 +227,7 @@ def upgrade() -> None:
         sa.Column("last_error", JSONB, nullable=True),
         sa.Column(
             "asset_version_id",
-            sa.Uuid(),
+            sa.Integer(),
             sa.ForeignKey(
                 "asset_version.id", ondelete="CASCADE", name="fk_job_version_id_asset_version"
             ),
@@ -248,10 +248,10 @@ def upgrade() -> None:
 
     op.create_table(
         "job_event",
-        sa.Column("id", sa.Uuid(), primary_key=True),
+        sa.Column("id", sa.Integer(), primary_key=True),
         sa.Column(
             "job_id",
-            sa.Uuid(),
+            sa.Integer(),
             sa.ForeignKey("job.id", ondelete="CASCADE", name="fk_job_event_job_id_job"),
             nullable=False,
         ),
@@ -267,9 +267,9 @@ def upgrade() -> None:
 
     op.create_table(
         "outbox_event",
-        sa.Column("id", sa.Uuid(), primary_key=True),
+        sa.Column("id", sa.Integer(), primary_key=True),
         sa.Column("aggregate_type", sa.String(32), nullable=False),
-        sa.Column("aggregate_id", sa.Uuid(), nullable=False),
+        sa.Column("aggregate_id", sa.Integer(), nullable=False),
         sa.Column("event_type", sa.String(64), nullable=False),
         sa.Column("payload", JSONB, nullable=False),
         sa.Column(

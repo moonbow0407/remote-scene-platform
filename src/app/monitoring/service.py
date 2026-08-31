@@ -18,7 +18,6 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Protocol
-from uuid import UUID
 
 import sqlalchemy as sa
 from geoalchemy2 import WKTElement
@@ -30,7 +29,6 @@ from app.catalogs.service import CatalogService
 from app.context import ActorContext, get_actor, now_utc
 from app.ecology.service import EcologyService
 from app.errors import ProblemError, conflict, not_found, validation_error
-from app.ids import new_uuid7
 from app.monitoring.dispatch import JobRunDispatcher
 from app.monitoring.enums import (
     OccurrenceStatus,
@@ -47,18 +45,18 @@ from app.monitoring.models import (
 )
 from app.monitoring.scheduling import Schedule, ScheduleScanLimitExceeded, parse_schedule
 from app.monitoring.schemas import PlanCreate, PlanUpdate
-from app.monitoring.selection import SelectionCriteria, select_ready_versions
+from app.monitoring.selection import SelectionCriteria, select_ready_assets
 from app.pagination import Page, PageParams
 
 logger = logging.getLogger(__name__)
 
 
-def _actor_uuid() -> UUID | None:
+def _actor_uuid() -> int | None:
     actor = get_actor()
     if actor.actor_id is None:
         return None
     try:
-        return UUID(actor.actor_id)
+        return int(actor.actor_id)
     except ValueError:
         return None
 
@@ -91,8 +89,8 @@ class RunDispatcher(Protocol):
     """
 
     def dispatch(
-        self, session: Session, run: MonitoringRun, input_version_ids: list[UUID]
-    ) -> UUID | None:
+        self, session: Session, run: MonitoringRun, input_version_ids: list[int]
+    ) -> int | None:
         """创建执行任务并返回 job_id；返回 None 仅供测试替身表示"未派发"。"""
         ...
 
@@ -101,7 +99,7 @@ class RunDispatcher(Protocol):
 class PlanView:
     """计划列表/详情的派生视图数据（生态参数主键集合）。"""
 
-    ecological_parameter_ids: list[UUID] = field(default_factory=list)
+    ecological_parameter_ids: list[int] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -120,15 +118,15 @@ class TickSummary:
     plans_considered: int = 0
     dispatched: int = 0
     missed_recorded: int = 0
-    skipped_plan_ids: list[UUID] = field(default_factory=list)
+    skipped_plan_ids: list[int] = field(default_factory=list)
 
 
-def _dedupe_preserving_order(ids: Sequence[UUID]) -> list[UUID]:
+def _dedupe_preserving_order(ids: Sequence[int]) -> list[int]:
     return list(dict.fromkeys(ids))
 
 
 class MonitoringService:
-    def asset_has_snapshot_references(self, asset_id: UUID) -> bool:
+    def asset_has_snapshot_references(self, asset_id: int) -> bool:
         """资产是否仍被不可变监测输入快照引用；生命周期模块据此禁止物理清理。"""
         return bool(
             self._session.scalar(
@@ -149,8 +147,8 @@ class MonitoringService:
     def create_plan(self, body: PlanCreate, *, actor: ActorContext | None = None) -> MonitoringPlan:
         boundary, boundary_wkt = self._normalize_boundary(body.boundary)
         schedule = parse_schedule(body.schedule_type, body.schedule_expression, body.timezone)
-        if body.resource_catalog_id is not None:
-            CatalogService(self._session).get_resource_required(body.resource_catalog_id)
+        if body.category_id is not None:
+            CatalogService(self._session).get_required(body.category_id)
         parameter_ids = _dedupe_preserving_order(body.ecological_parameter_ids)
         ecology = EcologyService(self._session)
         for parameter_id in parameter_ids:
@@ -159,7 +157,6 @@ class MonitoringService:
         operator = actor or get_actor()
         now = now_utc()
         plan = MonitoringPlan(
-            id=new_uuid7(),
             name=body.name.strip(),
             status=PlanStatus.ACTIVE,
             boundary=boundary,
@@ -167,8 +164,8 @@ class MonitoringService:
             schedule_type=body.schedule_type,
             schedule_expression=body.schedule_expression,
             timezone=body.timezone,
-            resource_catalog_id=body.resource_catalog_id,
-            created_by=None if operator.actor_id is None else UUID(operator.actor_id),
+            category_id=body.category_id,
+            created_by=None if operator.actor_id is None else int(operator.actor_id),
         )
         # 首个 occurrence：以创建时刻锚定新网格，不立即触发
         plan.next_run_at = schedule.next_after(now, anchor=now)
@@ -177,10 +174,10 @@ class MonitoringService:
         self._replace_parameters(plan, parameter_ids)
         return plan
 
-    def get_plan(self, plan_id: UUID) -> MonitoringPlan | None:
+    def get_plan(self, plan_id: int) -> MonitoringPlan | None:
         return self._session.get(MonitoringPlan, plan_id)
 
-    def get_plan_required(self, plan_id: UUID) -> MonitoringPlan:
+    def get_plan_required(self, plan_id: int) -> MonitoringPlan:
         plan = self.get_plan(plan_id)
         if plan is None:
             raise not_found("监测计划", plan_id)
@@ -204,7 +201,7 @@ class MonitoringService:
         )
         return Page.build(rows, total, params)
 
-    def update_plan(self, plan_id: UUID, body: PlanUpdate) -> MonitoringPlan:
+    def update_plan(self, plan_id: int, body: PlanUpdate) -> MonitoringPlan:
         plan = self.get_plan_required(plan_id)
         data = body.model_dump(exclude_unset=True)
 
@@ -227,12 +224,12 @@ class MonitoringService:
             plan.timezone = data.get("timezone", plan.timezone)
             now = now_utc()
             plan.next_run_at = schedule.next_after(now, anchor=now)
-        if "resource_catalog_id" in data:
-            if data["resource_catalog_id"] is None:
-                plan.resource_catalog_id = None
+        if "category_id" in data:
+            if data["category_id"] is None:
+                plan.category_id = None
             else:
-                CatalogService(self._session).get_resource_required(data["resource_catalog_id"])
-                plan.resource_catalog_id = data["resource_catalog_id"]
+                CatalogService(self._session).get_required(data["category_id"])
+                plan.category_id = data["category_id"]
         if "ecological_parameter_ids" in data:
             parameter_ids = _dedupe_preserving_order(data["ecological_parameter_ids"] or [])
             ecology = EcologyService(self._session)
@@ -243,7 +240,7 @@ class MonitoringService:
         self._session.flush()
         return plan
 
-    def pause_plan(self, plan_id: UUID) -> MonitoringPlan:
+    def pause_plan(self, plan_id: int) -> MonitoringPlan:
         plan = self.get_plan_required(plan_id)
         if plan.status is not PlanStatus.ACTIVE:
             raise conflict(
@@ -256,7 +253,7 @@ class MonitoringService:
         self._session.flush()
         return plan
 
-    def resume_plan(self, plan_id: UUID) -> MonitoringPlan:
+    def resume_plan(self, plan_id: int) -> MonitoringPlan:
         plan = self.get_plan_required(plan_id)
         if plan.status is not PlanStatus.PAUSED:
             raise conflict(
@@ -272,7 +269,7 @@ class MonitoringService:
         self._session.flush()
         return plan
 
-    def delete_plan(self, plan_id: UUID) -> None:
+    def delete_plan(self, plan_id: int) -> None:
         """物理删除计划（关联 occurrence/Run/快照随数据库级联删除）。
 
         软删除与 7 天恢复期按阶段方案属 Stage 6 统一生命周期，本阶段不引入。
@@ -281,7 +278,7 @@ class MonitoringService:
         self._session.delete(plan)
         self._session.flush()
 
-    def describe_plans(self, plans: Sequence[MonitoringPlan]) -> dict[UUID, PlanView]:
+    def describe_plans(self, plans: Sequence[MonitoringPlan]) -> dict[int, PlanView]:
         """批量取计划的生态参数主键集合，避免列表接口 N+1。"""
         plan_ids = [plan.id for plan in plans]
         if not plan_ids:
@@ -293,7 +290,7 @@ class MonitoringService:
                 )
             )
         )
-        views: dict[UUID, PlanView] = {}
+        views: dict[int, PlanView] = {}
         for row in rows:
             views.setdefault(row.plan_id, PlanView(ecological_parameter_ids=[]))
             views[row.plan_id].ecological_parameter_ids.append(row.ecological_parameter_id)
@@ -303,7 +300,7 @@ class MonitoringService:
 
     # ---- 手动触发与调度派发 ----
 
-    def trigger_plan(self, plan_id: UUID) -> MonitoringRun:
+    def trigger_plan(self, plan_id: int) -> MonitoringRun:
         """手动触发一次执行（occurrence 时刻为当前时刻）。
 
         手动触发不受 ACTIVE/PAUSED 限制（操作者显式动作优先于调度暂停），
@@ -391,7 +388,7 @@ class MonitoringService:
     # ---- 执行查询与状态推进 ----
 
     def list_runs(
-        self, plan_id: UUID, params: PageParams, *, status: RunStatus | None = None
+        self, plan_id: int, params: PageParams, *, status: RunStatus | None = None
     ) -> Page[MonitoringRun]:
         self.get_plan_required(plan_id)
         stmt = sa.select(MonitoringRun).where(MonitoringRun.plan_id == plan_id)
@@ -413,13 +410,13 @@ class MonitoringService:
         )
         return Page.build(rows, total, params)
 
-    def get_run_required(self, run_id: UUID) -> MonitoringRun:
+    def get_run_required(self, run_id: int) -> MonitoringRun:
         run = self._session.get(MonitoringRun, run_id)
         if run is None:
             raise not_found("监测执行", run_id)
         return run
 
-    def list_run_inputs(self, run_id: UUID, params: PageParams) -> Page[MonitoringRunInput]:
+    def list_run_inputs(self, run_id: int, params: PageParams) -> Page[MonitoringRunInput]:
         self.get_run_required(run_id)
         stmt = sa.select(MonitoringRunInput).where(MonitoringRunInput.run_id == run_id)
         count_stmt = (
@@ -437,7 +434,7 @@ class MonitoringService:
         )
         return Page.build(rows, total, params)
 
-    def describe_runs(self, runs: Sequence[MonitoringRun]) -> dict[UUID, RunView]:
+    def describe_runs(self, runs: Sequence[MonitoringRun]) -> dict[int, RunView]:
         """批量取执行的 occurrence 冗余信息与输入数量，避免列表接口 N+1。"""
         if not runs:
             return {}
@@ -450,7 +447,7 @@ class MonitoringService:
                 )
             )
         }
-        input_counts: dict[UUID, int] = {}
+        input_counts: dict[int, int] = {}
         count_rows = self._session.execute(
             sa.select(MonitoringRunInput.run_id, sa.func.count())
             .where(MonitoringRunInput.run_id.in_(run_ids))
@@ -458,7 +455,7 @@ class MonitoringService:
         )
         for run_id, count in count_rows:
             input_counts[run_id] = int(count)
-        views: dict[UUID, RunView] = {}
+        views: dict[int, RunView] = {}
         for run in runs:
             occurrence = occurrences.get(run.occurrence_id)
             if occurrence is None:
@@ -470,7 +467,7 @@ class MonitoringService:
             )
         return views
 
-    def mark_run_started(self, run_id: UUID) -> MonitoringRun:
+    def mark_run_started(self, run_id: int) -> MonitoringRun:
         """执行方开始处理（PENDING → RUNNING）。由监测执行方经接缝调用。
 
         幂等：至少一次投递下，租约回收后的重试尝试会再次到达本方法；执行已
@@ -488,7 +485,7 @@ class MonitoringService:
         self._session.flush()
         return run
 
-    def mark_run_succeeded(self, run_id: UUID) -> MonitoringRun:
+    def mark_run_succeeded(self, run_id: int) -> MonitoringRun:
         """执行成功（RUNNING → SUCCEEDED）。
 
         成功同时把计划 last_successful_run_at 推进到本次 occurrence 的计划时刻；
@@ -506,7 +503,7 @@ class MonitoringService:
         return run
 
     def mark_run_failed(
-        self, run_id: UUID, *, detail: str, code: str = "MONITORING_RUN_FAILED"
+        self, run_id: int, *, detail: str, code: str = "MONITORING_RUN_FAILED"
     ) -> MonitoringRun:
         """执行失败（RUNNING → FAILED）；code 区分失败类别（如快照损坏 SNAPSHOT_BROKEN）。"""
         run = self._require_run_in_status(run_id, RunStatus.RUNNING)
@@ -518,7 +515,7 @@ class MonitoringService:
 
     # ---- 内部实现 ----
 
-    def _require_run_in_status(self, run_id: UUID, expected: RunStatus) -> MonitoringRun:
+    def _require_run_in_status(self, run_id: int, expected: RunStatus) -> MonitoringRun:
         run = self.get_run_required(run_id)
         if run.status is not expected:
             raise conflict(
@@ -542,14 +539,13 @@ class MonitoringService:
             raise validation_error(f"计划边界不合法：{exc}") from exc
         return WKTElement(wkt, srid=4326), wkt
 
-    def _replace_parameters(self, plan: MonitoringPlan, parameter_ids: list[UUID]) -> None:
+    def _replace_parameters(self, plan: MonitoringPlan, parameter_ids: list[int]) -> None:
         """整体替换计划的生态参数关联（调用方已校验存在性）。"""
         existing = {row.ecological_parameter_id: row for row in plan.parameters}
         for parameter_id in parameter_ids:
             if parameter_id not in existing:
                 self._session.add(
                     MonitoringPlanParameter(
-                        id=new_uuid7(),
                         plan_id=plan.id,
                         ecological_parameter_id=parameter_id,
                     )
@@ -562,7 +558,7 @@ class MonitoringService:
     def _insert_occurrence(
         self,
         *,
-        plan_id: UUID,
+        plan_id: int,
         scheduled_for: datetime,
         trigger: OccurrenceTrigger,
         status: OccurrenceStatus,
@@ -573,7 +569,6 @@ class MonitoringService:
         Scheduler、重复扫描、重启恢复、手动触发与调度竞争在此收敛。
         """
         occurrence = MonitoringOccurrence(
-            id=new_uuid7(),
             plan_id=plan_id,
             scheduled_for=scheduled_for,
             trigger=trigger,
@@ -593,13 +588,12 @@ class MonitoringService:
         """创建执行并冻结输入快照（occurrence 已存在，二者同事务提交）。"""
         criteria = SelectionCriteria(
             boundary_wkt=plan.boundary_wkt,
-            resource_catalog_id=plan.resource_catalog_id,
+            category_id=plan.category_id,
             ecological_parameter_ids=tuple(row.ecological_parameter_id for row in plan.parameters),
             window_anchor=self._last_successful_anchor(plan.id),
         )
-        versions = select_ready_versions(self._session, criteria)
+        versions = select_ready_assets(self._session, criteria)
         run = MonitoringRun(
-            id=new_uuid7(),
             plan_id=plan.id,
             occurrence_id=occurrence.id,
             status=RunStatus.PENDING,
@@ -609,18 +603,16 @@ class MonitoringService:
         )
         self._session.add(run)
         self._session.flush()
-        for version in versions:
+        for asset in versions:
             self._session.add(
                 MonitoringRunInput(
-                    id=new_uuid7(),
                     run_id=run.id,
-                    asset_id=version.asset_id,
-                    asset_version_id=version.id,
+                    asset_id=asset.id,
                 )
             )
         self._session.flush()
         run.job_id = self._dispatcher.dispatch(
-            self._session, run, [version.id for version in versions]
+            self._session, run, [asset.id for asset in versions]
         )
         logger.info(
             "监测执行已创建并冻结输入快照",
@@ -634,7 +626,7 @@ class MonitoringService:
         )
         return run
 
-    def _last_successful_anchor(self, plan_id: UUID) -> datetime | None:
+    def _last_successful_anchor(self, plan_id: int) -> datetime | None:
         """增量窗口下界 = 最近一次 SUCCEEDED Run 的选择时刻；无则全量选择。"""
         return self._session.scalar(
             sa.select(MonitoringRun.window_anchor)

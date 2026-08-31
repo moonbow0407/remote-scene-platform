@@ -26,7 +26,7 @@ def upgrade() -> None:
     op.alter_column(
         "job",
         "asset_version_id",
-        existing_type=sa.Uuid(),
+        existing_type=sa.Integer(),
         nullable=True,
         comment=(
             "入库任务（RASTER/VECTOR/ATTACHMENT_INGESTION）的唯一目标版本；"
@@ -37,4 +37,4 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     # 回滚前提：库中不存在 asset_version_id 为 NULL 的 MONITORING_RUN 任务残留
-    op.alter_column("job", "asset_version_id", existing_type=sa.Uuid(), nullable=False)
+    op.alter_column("job", "asset_version_id", existing_type=sa.Integer(), nullable=False)

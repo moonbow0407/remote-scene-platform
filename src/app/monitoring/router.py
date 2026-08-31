@@ -7,7 +7,6 @@ WKT/GeoJSON 转换在服务端完成（ST_AsGeoJSON），客户端不接触 WKT�
 from collections.abc import Iterator
 from json import loads as json_loads
 from typing import Annotated, Any
-from uuid import UUID
 
 import sqlalchemy as sa
 from fastapi import APIRouter, Depends, Path, Query, Request
@@ -49,7 +48,7 @@ def _plan_summary(plan: MonitoringPlan, view: PlanView) -> PlanSummaryResponse:
         schedule_type=plan.schedule_type,
         schedule_expression=plan.schedule_expression,
         timezone=plan.timezone,
-        resource_catalog_id=plan.resource_catalog_id,
+        category_id=plan.category_id,
         ecological_parameter_ids=view.ecological_parameter_ids,
         next_run_at=plan.next_run_at,
         last_successful_run_at=plan.last_successful_run_at,
@@ -119,7 +118,7 @@ def list_plans(
     response_model=PlanDetailResponse,
 )
 def get_plan(
-    plan_id: Annotated[UUID, Path(description="监测计划 ID")],
+    plan_id: Annotated[int, Path(description="监测计划 ID")],
     session: Annotated[Session, Depends(_get_session)],
     service: Annotated[MonitoringService, Depends(_get_service)],
 ) -> PlanDetailResponse:
@@ -155,7 +154,7 @@ def create_plan(
     response_model=PlanDetailResponse,
 )
 def update_plan(
-    plan_id: Annotated[UUID, Path(description="监测计划 ID")],
+    plan_id: Annotated[int, Path(description="监测计划 ID")],
     body: PlanUpdate,
     session: Annotated[Session, Depends(_get_session)],
     service: Annotated[MonitoringService, Depends(_get_service)],
@@ -172,7 +171,7 @@ def update_plan(
     summary="删除监测计划",
 )
 def delete_plan(
-    plan_id: Annotated[UUID, Path(description="监测计划 ID")],
+    plan_id: Annotated[int, Path(description="监测计划 ID")],
     service: Annotated[MonitoringService, Depends(_get_service)],
 ) -> None:
     get_actor()
@@ -186,7 +185,7 @@ def delete_plan(
     response_model=PlanSummaryResponse,
 )
 def pause_plan(
-    plan_id: Annotated[UUID, Path(description="监测计划 ID")],
+    plan_id: Annotated[int, Path(description="监测计划 ID")],
     service: Annotated[MonitoringService, Depends(_get_service)],
 ) -> PlanSummaryResponse:
     get_actor()
@@ -202,7 +201,7 @@ def pause_plan(
     response_model=PlanSummaryResponse,
 )
 def resume_plan(
-    plan_id: Annotated[UUID, Path(description="监测计划 ID")],
+    plan_id: Annotated[int, Path(description="监测计划 ID")],
     service: Annotated[MonitoringService, Depends(_get_service)],
 ) -> PlanSummaryResponse:
     get_actor()
@@ -219,7 +218,7 @@ def resume_plan(
     response_model=RunResponse,
 )
 def trigger_plan(
-    plan_id: Annotated[UUID, Path(description="监测计划 ID")],
+    plan_id: Annotated[int, Path(description="监测计划 ID")],
     service: Annotated[MonitoringService, Depends(_get_service)],
 ) -> RunResponse:
     get_actor()
@@ -234,7 +233,7 @@ def trigger_plan(
     response_model=Page[RunResponse],
 )
 def list_runs(
-    plan_id: Annotated[UUID, Path(description="监测计划 ID")],
+    plan_id: Annotated[int, Path(description="监测计划 ID")],
     params: Annotated[PageParams, Depends()],
     service: Annotated[MonitoringService, Depends(_get_service)],
     status: Annotated[
@@ -253,7 +252,7 @@ def list_runs(
     response_model=RunResponse,
 )
 def get_run(
-    run_id: Annotated[UUID, Path(description="监测执行 ID")],
+    run_id: Annotated[int, Path(description="监测执行 ID")],
     service: Annotated[MonitoringService, Depends(_get_service)],
 ) -> RunResponse:
     run = service.get_run_required(run_id)
@@ -268,7 +267,7 @@ def get_run(
     response_model=Page[RunInputResponse],
 )
 def list_run_inputs(
-    run_id: Annotated[UUID, Path(description="监测执行 ID")],
+    run_id: Annotated[int, Path(description="监测执行 ID")],
     params: Annotated[PageParams, Depends()],
     service: Annotated[MonitoringService, Depends(_get_service)],
 ) -> Page[RunInputResponse]:
@@ -283,7 +282,7 @@ def list_run_inputs(
     response_model=RunResponse,
 )
 def start_run(
-    run_id: Annotated[UUID, Path(description="监测执行 ID")],
+    run_id: Annotated[int, Path(description="监测执行 ID")],
     service: Annotated[MonitoringService, Depends(_get_service)],
 ) -> RunResponse:
     """执行方接缝：标记执行开始（PENDING → RUNNING）。"""
@@ -299,7 +298,7 @@ def start_run(
     response_model=RunResponse,
 )
 def succeed_run(
-    run_id: Annotated[UUID, Path(description="监测执行 ID")],
+    run_id: Annotated[int, Path(description="监测执行 ID")],
     service: Annotated[MonitoringService, Depends(_get_service)],
 ) -> RunResponse:
     """执行方接缝：标记执行成功（RUNNING → SUCCEEDED），推进计划最近成功时刻。"""
@@ -315,7 +314,7 @@ def succeed_run(
     response_model=RunResponse,
 )
 def fail_run(
-    run_id: Annotated[UUID, Path(description="监测执行 ID")],
+    run_id: Annotated[int, Path(description="监测执行 ID")],
     body: RunTransitionRequest,
     service: Annotated[MonitoringService, Depends(_get_service)],
 ) -> RunResponse:

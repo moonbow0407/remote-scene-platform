@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 from typing import Any
-from uuid import UUID
 
 import sqlalchemy as sa
 from geoalchemy2 import WKTElement
@@ -17,21 +16,18 @@ class VectorFeatureService:
     def __init__(self, session: Session) -> None:
         self._session = session
 
-    def count_for_version(self, version_id: UUID) -> int:
+    def count_for_asset(self, asset_id: int) -> int:
         return int(
             self._session.scalar(
-                sa.select(sa.func.count()).where(VectorFeature.asset_version_id == version_id)
+                sa.select(sa.func.count()).where(VectorFeature.asset_id == asset_id)
             )
             or 0
         )
 
-    def delete_version_features(self, version_id: UUID) -> None:
-        self._session.execute(
-            sa.delete(VectorFeature).where(VectorFeature.asset_version_id == version_id)
-        )
+    def delete_asset_features(self, asset_id: int) -> None:
+        self._session.execute(sa.delete(VectorFeature).where(VectorFeature.asset_id == asset_id))
 
     def insert_feature_batch(self, rows: list[VectorFeature]) -> None:
-        """flush 后 expunge，避免身份映射持有已写入要素。"""
         if not rows:
             return
         self._session.add_all(rows)
@@ -39,22 +35,21 @@ class VectorFeatureService:
         for row in rows:
             self._session.expunge(row)
 
-    def replace_version_features(self, version_id: UUID, rows: list[VectorFeature]) -> None:
-        """同一事务内删除旧要素再写入；失败回滚后不会残留部分要素。"""
-        self.delete_version_features(version_id)
+    def replace_asset_features(self, asset_id: int, rows: list[VectorFeature]) -> None:
+        self.delete_asset_features(asset_id)
         self.insert_feature_batch(rows)
 
     def search(
         self,
         *,
-        version_id: UUID,
+        asset_id: int,
         geometry_wkt: str,
         offset: int,
         limit: int,
     ) -> tuple[list[tuple[VectorFeature, dict[str, Any]]], int]:
         geom = WKTElement(geometry_wkt, srid=4326)
         filters = (
-            VectorFeature.asset_version_id == version_id,
+            VectorFeature.asset_id == asset_id,
             sa.func.ST_Intersects(VectorFeature.geometry, geom),
         )
         total = int(self._session.scalar(sa.select(sa.func.count()).where(*filters)) or 0)

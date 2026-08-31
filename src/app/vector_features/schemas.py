@@ -1,7 +1,6 @@
 """矢量要素检索 API 模型。"""
 
 from typing import Any
-from uuid import UUID
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
@@ -22,7 +21,7 @@ class FeatureSearchRequest(BaseModel):
 
 
 class FeatureItem(BaseModel):
-    id: UUID = Field(description="要素 ID")
-    asset_version_id: UUID = Field(description="所属资产版本 ID")
+    id: int = Field(description="要素 ID")
+    asset_id: int = Field(description="所属资产 ID")
     spatial_geojson: dict[str, Any] = Field(description="要素几何，EPSG:4326 GeoJSON")
     properties: dict[str, Any] = Field(description="动态属性（JSONB）")

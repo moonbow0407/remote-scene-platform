@@ -14,7 +14,6 @@
 
 from datetime import datetime
 from typing import Any
-from uuid import UUID
 
 import sqlalchemy as sa
 from geoalchemy2 import Geometry
@@ -37,7 +36,7 @@ class MonitoringPlan(Base, TimestampMixin):
 
     __tablename__ = "monitoring_plan"
 
-    id: Mapped[UUID] = mapped_column(sa.Uuid, primary_key=True)
+    id: Mapped[int] = mapped_column(sa.Integer, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(sa.String(255), nullable=False)
     status: Mapped[PlanStatus] = mapped_column(
         sa.Enum(PlanStatus, native_enum=False, length=16),
@@ -66,11 +65,11 @@ class MonitoringPlan(Base, TimestampMixin):
     schedule_expression: Mapped[str] = mapped_column(sa.String(256), nullable=False)
     # IANA 时区名（如 Asia/Shanghai）；RRULE 的时刻在此时区生成后转 UTC
     timezone: Mapped[str] = mapped_column(sa.String(64), nullable=False)
-    resource_catalog_id: Mapped[UUID | None] = mapped_column(
-        sa.Uuid,
-        ForeignKey("resource_catalog.id", ondelete="RESTRICT"),
+    category_id: Mapped[int | None] = mapped_column(
+        sa.Integer,
+        ForeignKey("category.id", ondelete="RESTRICT"),
         nullable=True,
-        comment="资源目录约束（含子树）；空表示不限",
+        comment="分类约束；空表示不限",
     )
     # 下一次计划触发时刻（UTC 网格点）；PAUSED 保留旧值但不参与调度，
     # RRULE 周期耗尽为 NULL（计划自然停摆）
@@ -80,8 +79,8 @@ class MonitoringPlan(Base, TimestampMixin):
     last_successful_run_at: Mapped[datetime | None] = mapped_column(
         sa.DateTime(timezone=True), nullable=True
     )
-    created_by: Mapped[UUID | None] = mapped_column(
-        sa.Uuid, nullable=True, comment="鉴权预留：创建者"
+    created_by: Mapped[int | None] = mapped_column(
+        sa.Integer, nullable=True, comment="鉴权预留：创建者"
     )
 
     parameters: Mapped[list["MonitoringPlanParameter"]] = relationship(
@@ -99,15 +98,15 @@ class MonitoringPlanParameter(Base):
 
     __tablename__ = "monitoring_plan_parameter"
 
-    id: Mapped[UUID] = mapped_column(sa.Uuid, primary_key=True)
-    plan_id: Mapped[UUID] = mapped_column(
-        sa.Uuid,
+    id: Mapped[int] = mapped_column(sa.Integer, primary_key=True, autoincrement=True)
+    plan_id: Mapped[int] = mapped_column(
+        sa.Integer,
         ForeignKey("monitoring_plan.id", ondelete="CASCADE"),
         nullable=False,
         comment="所属监测计划",
     )
-    ecological_parameter_id: Mapped[UUID] = mapped_column(
-        sa.Uuid,
+    ecological_parameter_id: Mapped[int] = mapped_column(
+        sa.Integer,
         ForeignKey("ecological_parameter.id", ondelete="RESTRICT"),
         nullable=False,
         comment="生态参数主键",
@@ -131,9 +130,9 @@ class MonitoringOccurrence(Base):
 
     __tablename__ = "monitoring_occurrence"
 
-    id: Mapped[UUID] = mapped_column(sa.Uuid, primary_key=True)
-    plan_id: Mapped[UUID] = mapped_column(
-        sa.Uuid,
+    id: Mapped[int] = mapped_column(sa.Integer, primary_key=True, autoincrement=True)
+    plan_id: Mapped[int] = mapped_column(
+        sa.Integer,
         ForeignKey("monitoring_plan.id", ondelete="CASCADE"),
         nullable=False,
         comment="所属监测计划",
@@ -163,15 +162,15 @@ class MonitoringRun(Base, TimestampMixin):
 
     __tablename__ = "monitoring_run"
 
-    id: Mapped[UUID] = mapped_column(sa.Uuid, primary_key=True)
-    plan_id: Mapped[UUID] = mapped_column(
-        sa.Uuid,
+    id: Mapped[int] = mapped_column(sa.Integer, primary_key=True, autoincrement=True)
+    plan_id: Mapped[int] = mapped_column(
+        sa.Integer,
         ForeignKey("monitoring_plan.id", ondelete="CASCADE"),
         nullable=False,
         comment="所属监测计划",
     )
-    occurrence_id: Mapped[UUID] = mapped_column(
-        sa.Uuid,
+    occurrence_id: Mapped[int] = mapped_column(
+        sa.Integer,
         ForeignKey("monitoring_occurrence.id", ondelete="CASCADE"),
         nullable=False,
         unique=True,
@@ -192,8 +191,8 @@ class MonitoringRun(Base, TimestampMixin):
     )
     # 派发的执行任务主键；Job 生命周期归 jobs 模块，删除时置空不连带删除快照。
     # 派发由 JobRunDispatcher 在 Run 创建的同一事务中完成，正常恒非空
-    job_id: Mapped[UUID | None] = mapped_column(
-        sa.Uuid,
+    job_id: Mapped[int | None] = mapped_column(
+        sa.Integer,
         ForeignKey("job.id", ondelete="SET NULL"),
         nullable=True,
         comment="派发的 MONITORING_RUN Job 主键（与 Run 同事务创建）",
@@ -214,32 +213,22 @@ class MonitoringRun(Base, TimestampMixin):
 
 
 class MonitoringRunInput(Base):
-    """输入快照明细：Run 引用的具体资产版本集合，创建后不可变。
-
-    快照保存 asset_version_id（权威），asset_id 为同源冗余便于直接查询；
-    版本行一经引用不可物理删除（RESTRICT），物理清理须先确认无快照引用。
-    """
+    """输入快照明细：Run 引用的具体资产集合，创建后不可变。"""
 
     __tablename__ = "monitoring_run_input"
 
-    id: Mapped[UUID] = mapped_column(sa.Uuid, primary_key=True)
-    run_id: Mapped[UUID] = mapped_column(
-        sa.Uuid,
+    id: Mapped[int] = mapped_column(sa.Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[int] = mapped_column(
+        sa.Integer,
         ForeignKey("monitoring_run.id", ondelete="CASCADE"),
         nullable=False,
         comment="所属监测执行",
     )
-    asset_id: Mapped[UUID] = mapped_column(
-        sa.Uuid,
+    asset_id: Mapped[int] = mapped_column(
+        sa.Integer,
         ForeignKey("data_asset.id", ondelete="RESTRICT"),
         nullable=False,
-        comment="逻辑资产主键（与 version.asset_id 同源，便于直接查询）",
-    )
-    asset_version_id: Mapped[UUID] = mapped_column(
-        sa.Uuid,
-        ForeignKey("asset_version.id", ondelete="RESTRICT"),
-        nullable=False,
-        comment="冻结的资产版本主键；Run 创建后不可变",
+        comment="冻结的资产主键；Run 创建后不可变",
     )
     created_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
@@ -248,6 +237,6 @@ class MonitoringRunInput(Base):
     run: Mapped[MonitoringRun] = relationship(back_populates="inputs")
 
     __table_args__ = (
-        UniqueConstraint("run_id", "asset_version_id", name="uq_monitoring_run_input_version"),
+        UniqueConstraint("run_id", "asset_id", name="uq_monitoring_run_input_asset"),
         sa.Index("ix_monitoring_run_input_run", "run_id"),
     )

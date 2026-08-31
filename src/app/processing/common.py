@@ -7,7 +7,6 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from uuid import UUID
 
 from app.settings import Settings
 
@@ -16,8 +15,8 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class IngestionContext:
-    job_id: UUID
-    version_id: UUID
+    job_id: int
+    asset_id: int
     source_object_key: str
     source_size_bytes: int
     tmp_dir: Path
@@ -92,7 +91,7 @@ def preflight_tmp(ctx: IngestionContext, settings: Settings) -> None:
         raise DeterministicError(
             "TEMP_STORAGE_INSUFFICIENT",
             f"临时空间不足：可用 {usage.free} 字节，任务需要约 {required:.0f} 字节；"
-            "请扩容 APP_WORKER_TMP_DIR 所在磁盘后重新创建版本",
+            "请扩容 APP_WORKER_TMP_DIR 所在磁盘后重新上传",
         )
 
 

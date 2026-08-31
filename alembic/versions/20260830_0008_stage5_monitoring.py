@@ -22,7 +22,7 @@ depends_on: str | Sequence[str] | None = None
 def upgrade() -> None:
     op.create_table(
         "monitoring_plan",
-        sa.Column("id", sa.Uuid(), primary_key=True),
+        sa.Column("id", sa.Integer(), primary_key=True),
         sa.Column("name", sa.String(255), nullable=False),
         sa.Column("status", sa.String(16), nullable=False, comment="ACTIVE/PAUSED"),
         sa.Column(
@@ -45,7 +45,7 @@ def upgrade() -> None:
             comment="INTERVAL：ISO 8601 duration 子集；RRULE：RFC 5545 表达式",
         ),
         sa.Column("timezone", sa.String(64), nullable=False, comment="IANA 时区名"),
-        sa.Column("resource_catalog_id", sa.Uuid(), nullable=True),
+        sa.Column("resource_catalog_id", sa.Integer(), nullable=True),
         sa.Column(
             "next_run_at",
             sa.DateTime(timezone=True),
@@ -58,7 +58,7 @@ def upgrade() -> None:
             nullable=True,
             comment="最近一次成功执行的 scheduled_for",
         ),
-        sa.Column("created_by", sa.Uuid(), nullable=True, comment="鉴权预留：创建者"),
+        sa.Column("created_by", sa.Integer(), nullable=True, comment="鉴权预留：创建者"),
         sa.Column(
             "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
         ),
@@ -81,9 +81,9 @@ def upgrade() -> None:
 
     op.create_table(
         "monitoring_plan_parameter",
-        sa.Column("id", sa.Uuid(), primary_key=True),
-        sa.Column("plan_id", sa.Uuid(), nullable=False, comment="所属监测计划"),
-        sa.Column("ecological_parameter_id", sa.Uuid(), nullable=False, comment="生态参数主键"),
+        sa.Column("id", sa.Integer(), primary_key=True),
+        sa.Column("plan_id", sa.Integer(), nullable=False, comment="所属监测计划"),
+        sa.Column("ecological_parameter_id", sa.Integer(), nullable=False, comment="生态参数主键"),
         sa.ForeignKeyConstraint(
             ["plan_id"],
             ["monitoring_plan.id"],
@@ -109,8 +109,8 @@ def upgrade() -> None:
 
     op.create_table(
         "monitoring_occurrence",
-        sa.Column("id", sa.Uuid(), primary_key=True),
-        sa.Column("plan_id", sa.Uuid(), nullable=False, comment="所属监测计划"),
+        sa.Column("id", sa.Integer(), primary_key=True),
+        sa.Column("plan_id", sa.Integer(), nullable=False, comment="所属监测计划"),
         sa.Column(
             "scheduled_for",
             sa.DateTime(timezone=True),
@@ -134,9 +134,9 @@ def upgrade() -> None:
 
     op.create_table(
         "monitoring_run",
-        sa.Column("id", sa.Uuid(), primary_key=True),
-        sa.Column("plan_id", sa.Uuid(), nullable=False, comment="所属监测计划"),
-        sa.Column("occurrence_id", sa.Uuid(), nullable=False, comment="触发的 occurrence；1:1"),
+        sa.Column("id", sa.Integer(), primary_key=True),
+        sa.Column("plan_id", sa.Integer(), nullable=False, comment="所属监测计划"),
+        sa.Column("occurrence_id", sa.Integer(), nullable=False, comment="触发的 occurrence；1:1"),
         sa.Column(
             "status",
             sa.String(16),
@@ -151,7 +151,7 @@ def upgrade() -> None:
         ),
         sa.Column(
             "job_id",
-            sa.Uuid(),
+            sa.Integer(),
             nullable=True,
             comment="派发的 Job 主键；首版 dispatch adapter 未接线时为 NULL",
         ),
@@ -193,17 +193,17 @@ def upgrade() -> None:
 
     op.create_table(
         "monitoring_run_input",
-        sa.Column("id", sa.Uuid(), primary_key=True),
-        sa.Column("run_id", sa.Uuid(), nullable=False, comment="所属监测执行"),
+        sa.Column("id", sa.Integer(), primary_key=True),
+        sa.Column("run_id", sa.Integer(), nullable=False, comment="所属监测执行"),
         sa.Column(
             "asset_id",
-            sa.Uuid(),
+            sa.Integer(),
             nullable=False,
             comment="逻辑资产主键（与 version.asset_id 同源，便于直接查询）",
         ),
         sa.Column(
             "asset_version_id",
-            sa.Uuid(),
+            sa.Integer(),
             nullable=False,
             comment="冻结的资产版本主键；Run 创建后不可变",
         ),

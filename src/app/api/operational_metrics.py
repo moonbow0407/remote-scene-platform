@@ -22,8 +22,8 @@ from app.api.metrics import (
     WORKER_CONSUMERS,
     WORKER_UTILIZATION,
 )
-from app.assets.enums import ArtifactKind, ObjectCleanupStatus
-from app.assets.models import AssetArtifact, ObjectBlob, ObjectCleanupTask
+from app.assets.enums import ObjectCleanupStatus
+from app.assets.models import DataAsset, ObjectCleanupTask
 from app.context import now_utc
 from app.db import session_scope
 from app.jobs.enums import JobStatus, OutboxStatus
@@ -86,18 +86,9 @@ def refresh_database_metrics(factory: sessionmaker[Session]) -> None:
             )
             JOB_DURATION.labels(aggregation="max").set(max(durations, default=0))
             STORAGE_BYTES.labels(kind="original_blob").set(
-                int(session.scalar(sa.select(sa.func.sum(ObjectBlob.size_bytes))) or 0)
+                int(session.scalar(sa.select(sa.func.sum(DataAsset.size_bytes))) or 0)
             )
-            STORAGE_BYTES.labels(kind="derived_artifact").set(
-                int(
-                    session.scalar(
-                        sa.select(sa.func.sum(AssetArtifact.size_bytes)).where(
-                            AssetArtifact.kind != ArtifactKind.ORIGINAL
-                        )
-                    )
-                    or 0
-                )
-            )
+            STORAGE_BYTES.labels(kind="derived_artifact").set(0)
             CLEANUP_BACKLOG.set(
                 int(
                     session.scalar(

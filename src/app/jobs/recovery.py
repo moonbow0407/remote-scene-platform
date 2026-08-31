@@ -14,13 +14,11 @@ started_at 阈值判定永远无法触发回收。租约过期是唯一可靠的
 import logging
 from datetime import timedelta
 from typing import Any
-from uuid import UUID
 
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
 from app.context import now_utc
-from app.ids import new_uuid7
 from app.jobs.enums import TASK_BY_JOB_TYPE, JobStatus, OutboxStatus
 from app.jobs.models import Job, OutboxEvent
 from app.jobs.service import JobService
@@ -31,7 +29,7 @@ logger = logging.getLogger(__name__)
 _RECOVERY_REQUEUE_DELAY_SECONDS = 5
 
 
-def recover_expired_leases(session: Session, *, batch_size: int = 50) -> list[UUID]:
+def recover_expired_leases(session: Session, *, batch_size: int = 50) -> list[int]:
     """回收一批租约过期的 RUNNING Job；返回本次回收的 Job ID。
 
     FOR UPDATE SKIP LOCKED：多恢复器实例并发扫描不重叠，也不阻塞正常业务写。
@@ -52,7 +50,7 @@ def recover_expired_leases(session: Session, *, batch_size: int = 50) -> list[UU
         return []
 
     service = JobService(session)
-    recovered: list[UUID] = []
+    recovered: list[int] = []
     for job in jobs:
         detail: dict[str, Any] = {
             "code": "LEASE_LOST",
@@ -72,7 +70,6 @@ def recover_expired_leases(session: Session, *, batch_size: int = 50) -> list[UU
             job.last_error = detail
             session.add(
                 OutboxEvent(
-                    id=new_uuid7(),
                     aggregate_type="job",
                     aggregate_id=job.id,
                     event_type="job.dispatch",
@@ -93,21 +90,19 @@ def recover_expired_leases(session: Session, *, batch_size: int = 50) -> list[UU
 
 def _fail_related_version_if_possible(session: Session, job: Job) -> None:
     """重试耗尽时同步终止关联资产版本的伪运行状态；非入库任务或状态不允许时跳过。"""
-    version_id = job.payload.get("asset_version_id")
-    if version_id is None:
+    asset_id = job.payload.get("asset_id")
+    if asset_id is None:
         return
-    from app.assets.enums import AssetVersionStatus
+    from app.assets.asset_state import is_asset_transition_allowed
+    from app.assets.enums import AssetStatus
     from app.assets.service import AssetService
-    from app.assets.version_state import is_version_transition_allowed
 
-    version = AssetService(session).get_version_by_id(UUID(str(version_id)))
-    if version is None or not is_version_transition_allowed(
-        version.status, AssetVersionStatus.FAILED
-    ):
+    asset = AssetService(session).get_asset_by_id(int(asset_id))
+    if asset is None or not is_asset_transition_allowed(asset.status, AssetStatus.FAILED):
         return
-    AssetService(session).set_version_status(
-        version,
-        AssetVersionStatus.FAILED,
+    AssetService(session).set_status(
+        asset,
+        AssetStatus.FAILED,
         diagnostics={
             "reason": "LEASE_LOST_EXHAUSTED",
             "detail": f"任务 {job.id} 执行租约过期且重试次数耗尽",
