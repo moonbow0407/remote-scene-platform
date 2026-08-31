@@ -94,6 +94,7 @@ def _run_input_response(row: MonitoringRunInput) -> RunInputResponse:
 @router.get(
     "/plans",
     summary="监测计划列表",
+    description="分页列出监测计划。",
     response_model=Page[PlanSummaryResponse],
 )
 def list_plans(
@@ -101,7 +102,7 @@ def list_plans(
     session: Annotated[Session, Depends(_get_session)],
     service: Annotated[MonitoringService, Depends(_get_service)],
     status: Annotated[
-        PlanStatus | None, Query(description="计划状态：ACTIVE 调度中、PAUSED 已暂停；省略不过滤")
+        PlanStatus | None, Query(description="按是否还在自动执行过滤；不传则不限")
     ] = None,
 ) -> Page[PlanSummaryResponse]:
     page = service.list_plans(params, status=status)
@@ -114,11 +115,11 @@ def list_plans(
 @router.get(
     "/plans/{plan_id}",
     summary="监测计划详情",
-    description="含空间范围 GeoJSON 与调度配置。",
+    description="含监测范围和重复执行配置。",
     response_model=PlanDetailResponse,
 )
 def get_plan(
-    plan_id: Annotated[int, Path(description="监测计划 ID")],
+    plan_id: Annotated[int, Path(description="监测计划编号")],
     session: Annotated[Session, Depends(_get_session)],
     service: Annotated[MonitoringService, Depends(_get_service)],
 ) -> PlanDetailResponse:
@@ -131,9 +132,7 @@ def get_plan(
     "/plans",
     status_code=201,
     summary="创建监测计划",
-    description=(
-        "空间范围必须是 EPSG:4326 的 Polygon 或 MultiPolygon。创建后由独立 Scheduler 扫描到期计划。"
-    ),
+    description="监测范围必须是经纬度 GeoJSON 多边形。创建后会按设定的周期自动执行。",
     response_model=PlanDetailResponse,
 )
 def create_plan(
@@ -150,11 +149,11 @@ def create_plan(
 @router.put(
     "/plans/{plan_id}",
     summary="更新监测计划",
-    description="未出现的字段保持不变。生态参数列表若出现则整体替换。",
+    description="没写的字段保持原值。生态参数列表一旦传入就整表替换。",
     response_model=PlanDetailResponse,
 )
 def update_plan(
-    plan_id: Annotated[int, Path(description="监测计划 ID")],
+    plan_id: Annotated[int, Path(description="监测计划编号")],
     body: PlanUpdate,
     session: Annotated[Session, Depends(_get_session)],
     service: Annotated[MonitoringService, Depends(_get_service)],
@@ -169,9 +168,10 @@ def update_plan(
     "/plans/{plan_id}",
     status_code=204,
     summary="删除监测计划",
+    description="删除计划本身。已经产生的执行记录仍可按编号查看。",
 )
 def delete_plan(
-    plan_id: Annotated[int, Path(description="监测计划 ID")],
+    plan_id: Annotated[int, Path(description="监测计划编号")],
     service: Annotated[MonitoringService, Depends(_get_service)],
 ) -> None:
     get_actor()
@@ -181,11 +181,11 @@ def delete_plan(
 @router.post(
     "/plans/{plan_id}/pause",
     summary="暂停监测计划",
-    description="暂停后不再参与调度，配置保留。",
+    description="暂停后不再按周期自动执行，配置保留。",
     response_model=PlanSummaryResponse,
 )
 def pause_plan(
-    plan_id: Annotated[int, Path(description="监测计划 ID")],
+    plan_id: Annotated[int, Path(description="监测计划编号")],
     service: Annotated[MonitoringService, Depends(_get_service)],
 ) -> PlanSummaryResponse:
     get_actor()
@@ -197,11 +197,11 @@ def pause_plan(
 @router.post(
     "/plans/{plan_id}/resume",
     summary="恢复监测计划",
-    description="从 PAUSED 恢复为 ACTIVE，重新参与调度。",
+    description="从暂停恢复为按周期自动执行。",
     response_model=PlanSummaryResponse,
 )
 def resume_plan(
-    plan_id: Annotated[int, Path(description="监测计划 ID")],
+    plan_id: Annotated[int, Path(description="监测计划编号")],
     service: Annotated[MonitoringService, Depends(_get_service)],
 ) -> PlanSummaryResponse:
     get_actor()
@@ -213,12 +213,15 @@ def resume_plan(
 @router.post(
     "/plans/{plan_id}/trigger",
     status_code=201,
-    summary="手动触发一次执行",
-    description="立即按增量窗口选择 READY 资产版本，冻结输入快照并派发任务。",
+    summary="立刻执行一次",
+    description=(
+        "马上按计划范围挑选上次成功之后新入库、且已处理完成的数据，"
+        "记下本次使用的资产编号并开始执行。"
+    ),
     response_model=RunResponse,
 )
 def trigger_plan(
-    plan_id: Annotated[int, Path(description="监测计划 ID")],
+    plan_id: Annotated[int, Path(description="监测计划编号")],
     service: Annotated[MonitoringService, Depends(_get_service)],
 ) -> RunResponse:
     get_actor()
@@ -230,15 +233,16 @@ def trigger_plan(
 @router.get(
     "/plans/{plan_id}/runs",
     summary="计划执行记录",
+    description="这个计划历史上每一次执行。",
     response_model=Page[RunResponse],
 )
 def list_runs(
-    plan_id: Annotated[int, Path(description="监测计划 ID")],
+    plan_id: Annotated[int, Path(description="监测计划编号")],
     params: Annotated[PageParams, Depends()],
     service: Annotated[MonitoringService, Depends(_get_service)],
     status: Annotated[
         RunStatus | None,
-        Query(description="执行状态：PENDING / RUNNING / SUCCEEDED / FAILED；省略不过滤"),
+        Query(description="按执行状态过滤；不传则不限"),
     ] = None,
 ) -> Page[RunResponse]:
     page = service.list_runs(plan_id, params, status=status)
@@ -249,10 +253,11 @@ def list_runs(
 @router.get(
     "/runs/{run_id}",
     summary="监测执行详情",
+    description="一次执行的状态、时间和选中资产数量。",
     response_model=RunResponse,
 )
 def get_run(
-    run_id: Annotated[int, Path(description="监测执行 ID")],
+    run_id: Annotated[int, Path(description="这次执行的编号")],
     service: Annotated[MonitoringService, Depends(_get_service)],
 ) -> RunResponse:
     run = service.get_run_required(run_id)
@@ -262,12 +267,12 @@ def get_run(
 
 @router.get(
     "/runs/{run_id}/inputs",
-    summary="执行输入快照",
-    description="本次执行冻结的资产版本清单，创建后不可变。",
+    summary="这次选用的资产",
+    description="本次执行选中的资产名单，创建后不能改。",
     response_model=Page[RunInputResponse],
 )
 def list_run_inputs(
-    run_id: Annotated[int, Path(description="监测执行 ID")],
+    run_id: Annotated[int, Path(description="这次执行的编号")],
     params: Annotated[PageParams, Depends()],
     service: Annotated[MonitoringService, Depends(_get_service)],
 ) -> Page[RunInputResponse]:
@@ -278,14 +283,14 @@ def list_run_inputs(
 @router.post(
     "/runs/{run_id}/start",
     summary="标记执行开始",
-    description="执行方接缝：PENDING → RUNNING。日常联调一般由 Worker 调用，不必手点。",
+    description="给处理程序调用：从待执行改为执行中。页面一般不用点。",
     response_model=RunResponse,
 )
 def start_run(
-    run_id: Annotated[int, Path(description="监测执行 ID")],
+    run_id: Annotated[int, Path(description="这次执行的编号")],
     service: Annotated[MonitoringService, Depends(_get_service)],
 ) -> RunResponse:
-    """执行方接缝：标记执行开始（PENDING → RUNNING）。"""
+
     run = service.mark_run_started(run_id)
     views = service.describe_runs([run])
     return _run_response(run, views[run.id])
@@ -294,14 +299,14 @@ def start_run(
 @router.post(
     "/runs/{run_id}/succeed",
     summary="标记执行成功",
-    description="执行方接缝：RUNNING → SUCCEEDED，并更新计划的最近成功时刻。",
+    description="给处理程序调用：执行成功，并记下这次成功时间，供下次挑选新数据。页面一般不用点。",
     response_model=RunResponse,
 )
 def succeed_run(
-    run_id: Annotated[int, Path(description="监测执行 ID")],
+    run_id: Annotated[int, Path(description="这次执行的编号")],
     service: Annotated[MonitoringService, Depends(_get_service)],
 ) -> RunResponse:
-    """执行方接缝：标记执行成功（RUNNING → SUCCEEDED），推进计划最近成功时刻。"""
+
     run = service.mark_run_succeeded(run_id)
     views = service.describe_runs([run])
     return _run_response(run, views[run.id])
@@ -310,15 +315,15 @@ def succeed_run(
 @router.post(
     "/runs/{run_id}/fail",
     summary="标记执行失败",
-    description="执行方接缝：RUNNING → FAILED，并把诊断写入执行记录。",
+    description="给处理程序调用：执行失败，并把原因写进记录。页面一般不用点。",
     response_model=RunResponse,
 )
 def fail_run(
-    run_id: Annotated[int, Path(description="监测执行 ID")],
+    run_id: Annotated[int, Path(description="这次执行的编号")],
     body: RunTransitionRequest,
     service: Annotated[MonitoringService, Depends(_get_service)],
 ) -> RunResponse:
-    """执行方接缝：标记执行失败（RUNNING → FAILED），记录诊断。"""
+
     run = service.mark_run_failed(run_id, detail=body.detail or "未提供失败诊断")
     views = service.describe_runs([run])
     return _run_response(run, views[run.id])

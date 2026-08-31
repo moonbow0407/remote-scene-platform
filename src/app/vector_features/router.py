@@ -26,11 +26,11 @@ def _get_session(request: Request) -> Iterator[Session]:
 @router.post(
     "/{asset_id}/features/search",
     summary="检索矢量要素",
-    description="仅 READY 的矢量资产可用。范围必须是 EPSG:4326 的 Polygon 或 MultiPolygon。",
+    description="只对处理完成的矢量资产有效。检索范围必须是经纬度 GeoJSON 多边形。",
     response_model=Page[FeatureItem],
 )
 def search_features(
-    asset_id: Annotated[int, Path(description="资产 ID")],
+    asset_id: Annotated[int, Path(description="资产编号")],
     body: FeatureSearchRequest,
     session: Annotated[Session, Depends(_get_session)],
 ) -> Page[FeatureItem]:

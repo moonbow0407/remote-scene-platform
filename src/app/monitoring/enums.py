@@ -10,24 +10,26 @@
 
 from enum import StrEnum
 
+from app.schema_docs import enum_docs
 
+
+@enum_docs("计划状态", "ACTIVE：按周期自动执行；PAUSED：暂停，配置保留。")
 class PlanStatus(StrEnum):
-    """计划状态：ACTIVE 参与调度、PAUSED 暂停但不删除配置。"""
-
     ACTIVE = "ACTIVE"
     PAUSED = "PAUSED"
 
 
+@enum_docs(
+    "调度类型",
+    "INTERVAL：固定间隔，例如每 6 小时、每天；RRULE：按星期几等规则重复。",
+)
 class ScheduleType(StrEnum):
-    """调度类型：INTERVAL 固定间隔（如 PT6H/P1D）、RRULE 按 RFC 5545 重复规则。"""
-
     INTERVAL = "INTERVAL"
     RRULE = "RRULE"
 
 
+@enum_docs("触发来源", "SCHEDULED：到点自动执行；MANUAL：页面上手动点一次。")
 class OccurrenceTrigger(StrEnum):
-    """触发来源：SCHEDULED 调度器到期、MANUAL 人工手动触发。"""
-
     SCHEDULED = "SCHEDULED"
     MANUAL = "MANUAL"
 
@@ -43,8 +45,12 @@ class OccurrenceStatus(StrEnum):
     MISSED = "MISSED"
 
 
+@enum_docs(
+    "执行状态",
+    "PENDING：尚未开始；RUNNING：正在执行；SUCCEEDED：成功；FAILED：失败。",
+)
 class RunStatus(StrEnum):
-    """监测执行状态：PENDING 待执行、RUNNING 执行中、SUCCEEDED 成功、FAILED 失败。"""
+    """一次监测执行的状态。"""
 
     PENDING = "PENDING"
     RUNNING = "RUNNING"

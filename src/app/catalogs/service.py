@@ -27,9 +27,7 @@ class CatalogService:
     def __init__(self, session: Session) -> None:
         self._session = session
 
-    def list_categories(
-        self, pagination: PageParams, *, q: str | None = None
-    ) -> Page[Category]:
+    def list_categories(self, pagination: PageParams, *, q: str | None = None) -> Page[Category]:
         stmt = sa.select(Category)
         count_stmt = sa.select(sa.func.count()).select_from(Category)
         if q:

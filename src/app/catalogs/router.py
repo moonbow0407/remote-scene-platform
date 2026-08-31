@@ -31,12 +31,13 @@ def _response(row: object) -> CategoryResponse:
 @router.get(
     "",
     summary="分类列表",
+    description="平铺列表，没有上下级。",
     response_model=Page[CategoryResponse],
 )
 def list_categories(
     service: Annotated[CatalogService, Depends(_get_service)],
     pagination: Annotated[PageParams, Depends()],
-    q: Annotated[str | None, Query(description="按名称模糊过滤")] = None,
+    q: Annotated[str | None, Query(description="按名称模糊查找")] = None,
 ) -> Page[CategoryResponse]:
     page = service.list_categories(pagination, q=q)
     return Page[CategoryResponse](
@@ -53,7 +54,7 @@ def list_categories(
     response_model=CategoryResponse,
 )
 def get_category(
-    category_id: Annotated[int, Path(description="分类 ID")],
+    category_id: Annotated[int, Path(description="分类编号")],
     service: Annotated[CatalogService, Depends(_get_service)],
 ) -> CategoryResponse:
     return _response(service.get_required(category_id))
@@ -63,6 +64,7 @@ def get_category(
     "",
     status_code=201,
     summary="创建分类",
+    description="名称全局不能重复。",
     response_model=CategoryResponse,
 )
 def create_category(
@@ -76,10 +78,11 @@ def create_category(
 @router.put(
     "/{category_id}",
     summary="重命名分类",
+    description="只改名称，新名称也不能和已有分类重复。",
     response_model=CategoryResponse,
 )
 def update_category(
-    category_id: Annotated[int, Path(description="分类 ID")],
+    category_id: Annotated[int, Path(description="分类编号")],
     body: CategoryUpdate,
     service: Annotated[CatalogService, Depends(_get_service)],
 ) -> CategoryResponse:
@@ -91,9 +94,10 @@ def update_category(
     "/{category_id}",
     status_code=204,
     summary="删除分类",
+    description="还有资产或其他记录在用这个分类时，不能删除。",
 )
 def delete_category(
-    category_id: Annotated[int, Path(description="分类 ID")],
+    category_id: Annotated[int, Path(description="分类编号")],
     service: Annotated[CatalogService, Depends(_get_service)],
 ) -> None:
     get_actor()

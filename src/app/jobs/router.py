@@ -1,4 +1,4 @@
-"""Job 路由：进度轮询（首版不提供 SSE，事件模型为二期预留边界）。"""
+"""后台任务查询与取消。管理页面请轮询资产状态。"""
 
 import logging
 from collections.abc import Iterator
@@ -28,14 +28,11 @@ def _get_session(request: Request) -> Iterator[Session]:
 @router.get(
     "/{job_id}",
     summary="查询任务",
-    description=(
-        "轮询入库或监测任务进度。首版不提供 SSE，请按此接口轮询。"
-        "管理页请轮询 GET /assets/{id}。本接口留给运维。"
-    ),
+    description="查看后台处理进度。管理页面请轮询「资产详情」的 status，不必用本接口。",
     response_model=JobResponse,
 )
 def get_job(
-    job_id: Annotated[int, Path(description="任务 ID")],
+    job_id: Annotated[int, Path(description="任务编号")],
     request: Request,
     session: Annotated[Session, Depends(_get_session)],
 ) -> JobResponse:
@@ -76,17 +73,14 @@ def get_job(
 @router.post(
     "/{job_id}/cancel",
     summary="取消任务",
-    description=(
-        "排队中的任务立即取消；运行中的任务记为 CANCEL_REQUESTED，"
-        "在下一个处理步骤检查点进入 CANCELLED。"
-    ),
+    description="还在排队的任务立刻取消；已经在跑的会先记为取消中，处理完当前步骤后停止。",
     response_model=CancelJobResponse,
 )
 def cancel_job(
-    job_id: Annotated[int, Path(description="任务 ID")],
+    job_id: Annotated[int, Path(description="任务编号")],
     session: Annotated[Session, Depends(_get_session)],
 ) -> CancelJobResponse:
-    """请求取消；排队任务立即取消，运行中任务在下一个处理步骤检查点停止。"""
+
     jobs = JobService(session)
     job = jobs.request_cancel(jobs.get_required(job_id))
     if job.asset_id is not None and job.status is JobStatus.CANCELLED:

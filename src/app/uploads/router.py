@@ -44,8 +44,12 @@ def _get_service(
 @router.post(
     "/sessions",
     status_code=201,
-    summary="创建上传会话",
-    description="只需文件名和大小。服务端按大小切分并返回预签名地址。文件直传 MinIO。",
+    summary="创建上传",
+    description=(
+        "提交文件名和字节数。返回分片的临时 PUT 地址和资产编号。"
+        "把每一片直接 PUT 到对应地址，不要把文件 POST 到本接口。"
+        "全部传完后调用「完成上传」。"
+    ),
     response_model=SessionCreatedResponse,
 )
 def create_session(
@@ -70,11 +74,12 @@ def create_session(
 
 @router.get(
     "/sessions/{session_id}",
-    summary="上传会话详情",
+    summary="上传详情",
+    description="查看已传到哪、还缺哪几片。中断后续传时用。",
     response_model=SessionDetailResponse,
 )
 def get_session(
-    session_id: Annotated[int, Path(description="上传会话 ID")],
+    session_id: Annotated[int, Path(description="本次上传编号")],
     service: Annotated[UploadService, Depends(_get_service)],
 ) -> SessionDetailResponse:
     session = service.get_session_required(session_id)
@@ -87,11 +92,12 @@ def get_session(
 
 @router.get(
     "/sessions/{session_id}/parts/{part_number}/url",
-    summary="补签分片上传地址",
+    summary="补签分片地址",
+    description="某一片的临时地址过期后，用本接口重新拿一个 PUT 地址。",
     response_model=PartUrlResponse,
 )
 def get_part_url(
-    session_id: Annotated[int, Path(description="上传会话 ID")],
+    session_id: Annotated[int, Path(description="本次上传编号")],
     part_number: Annotated[int, Path(ge=1, description="分片序号，从 1 开始")],
     service: Annotated[UploadService, Depends(_get_service)],
 ) -> PartUrlResponse:
@@ -111,11 +117,15 @@ def get_part_url(
 @router.post(
     "/sessions/{session_id}/complete",
     summary="完成上传",
-    description="合并分片并开始处理。之后轮询 GET /assets/{id} 直到可用或失败。",
+    description=(
+        "合并已上传的分片并开始后台处理。"
+        "之后用返回的 asset_id 请求「资产详情」，直到 status 变为 READY、FAILED 或 NEEDS_INPUT。"
+        "重复调用会返回同一结果，不会再传一遍。"
+    ),
     response_model=SessionCompletedResponse,
 )
 def complete_session(
-    session_id: Annotated[int, Path(description="上传会话 ID")],
+    session_id: Annotated[int, Path(description="本次上传编号")],
     service: Annotated[UploadService, Depends(_get_service)],
 ) -> SessionCompletedResponse:
     result = service.complete_session(session_id)
@@ -125,10 +135,11 @@ def complete_session(
 @router.post(
     "/sessions/{session_id}/abort",
     summary="中止上传",
+    description="取消这次上传。对应资产会记为失败。已经完成的上传不能中止。",
     response_model=SessionAbortResponse,
 )
 def abort_session(
-    session_id: Annotated[int, Path(description="上传会话 ID")],
+    session_id: Annotated[int, Path(description="本次上传编号")],
     service: Annotated[UploadService, Depends(_get_service)],
 ) -> SessionAbortResponse:
     session = service.abort_session(session_id)

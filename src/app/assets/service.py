@@ -204,9 +204,7 @@ class AssetService:
         if ecological_parameter_ids:
             from app.ecology.service import EcologyService
 
-            mapped_ids = EcologyService(self._session).mapped_category_ids(
-                ecological_parameter_ids
-            )
+            mapped_ids = EcologyService(self._session).mapped_category_ids(ecological_parameter_ids)
             if not mapped_ids:
                 return [], 0
             conditions.append(DataAsset.category_id.in_(mapped_ids))

@@ -18,7 +18,7 @@ from app.db import session_scope
 from app.errors import forbidden, unauthorized
 from app.settings import Settings
 
-_bearer = HTTPBearer(auto_error=False)
+_bearer = HTTPBearer(auto_error=False, description="登录后拿到的访问令牌")
 
 
 def get_session(request: Request) -> Iterator[Session]:

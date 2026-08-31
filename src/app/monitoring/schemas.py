@@ -1,16 +1,24 @@
-"""监测模块 API 模型。
-
-boundary 以 GeoJSON（EPSG:4326 Polygon/MultiPolygon）进出；合法性由
-`app.assets.geometry.geojson_to_wkt` 校验（复用项目既有几何校验体系），存储侧
-统一归一化为 MULTIPOLYGON。
-"""
+"""监测计划、执行记录和本次选用的资产。"""
 
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.monitoring.enums import OccurrenceTrigger, PlanStatus, RunStatus, ScheduleType
+
+_POLYGON_EXAMPLE = {
+    "type": "Polygon",
+    "coordinates": [
+        [
+            [116.0, 39.0],
+            [117.0, 39.0],
+            [117.0, 40.0],
+            [116.0, 40.0],
+            [116.0, 39.0],
+        ]
+    ],
+}
 
 
 def _validate_boundary_is_object(value: dict[str, Any]) -> dict[str, Any]:
@@ -20,26 +28,37 @@ def _validate_boundary_is_object(value: dict[str, Any]) -> dict[str, Any]:
 
 
 class PlanCreate(BaseModel):
-    name: str = Field(min_length=1, max_length=255, description="监测计划名称")
+    """新建监测计划。到点后按范围和分类自动挑选已处理完成的数据并执行。"""
+
+    model_config = ConfigDict(title="创建监测计划")
+
+    name: str = Field(min_length=1, max_length=255, description="计划名称")
     boundary: dict[str, Any] = Field(
-        description="监测空间范围，必须是 EPSG:4326 GeoJSON Polygon 或 MultiPolygon"
+        description="监测范围。必须是经纬度 GeoJSON 的 Polygon 或 MultiPolygon",
+        examples=[_POLYGON_EXAMPLE],
     )
-    schedule_type: ScheduleType = Field(description="调度类型：INTERVAL 固定间隔、RRULE 重复规则")
+    schedule_type: ScheduleType = Field(description="怎么重复执行")
     schedule_expression: str = Field(
         min_length=1,
         max_length=256,
         description=(
-            "INTERVAL 填 ISO 8601 时长（如 PT6H、P1D）；RRULE 填 RFC 5545 表达式（不含 DTSTART）"
+            "INTERVAL 填时长：PT6H 每 6 小时，P1D 每天。"
+            "RRULE 填重复规则，例如 FREQ=WEEKLY;BYDAY=MO 表示每周一"
         ),
+        examples=["P1D"],
     )
     timezone: str = Field(
-        min_length=1, max_length=64, description="IANA 时区名，如 Asia/Shanghai，用于解释调度周期"
+        min_length=1,
+        max_length=64,
+        description="时区名称，例如 Asia/Shanghai，用来解释当地的执行时刻",
+        examples=["Asia/Shanghai"],
     )
     category_id: int | None = Field(
-        default=None, description="资源目录约束；省略表示不限目录"
+        default=None, description="只选这个分类的资产；不传表示不限分类"
     )
     ecological_parameter_ids: list[int] = Field(
-        default_factory=list, description="生态参数约束；空列表表示不限生态参数"
+        default_factory=list,
+        description="只选这些生态参数对应分类下的资产；空数组表示不限",
     )
 
     @field_validator("boundary")
@@ -65,30 +84,28 @@ class PlanCreate(BaseModel):
 
 
 class PlanUpdate(BaseModel):
-    """部分更新：未出现字段保持不变。
+    """改监测计划。没写的字段保持原值。分类传 null 表示不再限分类。"""
 
-    `category_id` 显式 null 表示清除目录约束；`boundary`、调度三字段、
-    `ecological_parameter_ids` 出现即整体替换（列表不做增量合并）。
-    """
+    model_config = ConfigDict(title="更新监测计划")
 
     name: str | None = Field(
-        default=None, min_length=1, max_length=255, description="新名称；省略不改"
+        default=None, min_length=1, max_length=255, description="新名称；不传则不改"
     )
     boundary: dict[str, Any] | None = Field(
-        default=None, description="新空间范围（EPSG:4326 GeoJSON）；省略不改"
+        default=None, description="新的监测范围（经纬度 GeoJSON）；不传则不改"
     )
-    schedule_type: ScheduleType | None = Field(default=None, description="新调度类型；省略不改")
+    schedule_type: ScheduleType | None = Field(default=None, description="新的重复方式；不传则不改")
     schedule_expression: str | None = Field(
-        default=None, min_length=1, max_length=256, description="新调度表达式；省略不改"
+        default=None, min_length=1, max_length=256, description="新的重复表达式；不传则不改"
     )
     timezone: str | None = Field(
-        default=None, min_length=1, max_length=64, description="新时区；省略不改"
+        default=None, min_length=1, max_length=64, description="新时区；不传则不改"
     )
     category_id: int | None = Field(
-        default=None, description="资源目录：省略不改；UUID 改为该目录；null 清除约束"
+        default=None, description="分类编号；不传则不改，传 null 表示不再限分类"
     )
     ecological_parameter_ids: list[int] | None = Field(
-        default=None, description="生态参数列表，出现则整体替换；省略不改"
+        default=None, description="生态参数编号列表，传入则整表替换；不传则不改"
     )
 
     @field_validator("boundary")
@@ -120,57 +137,73 @@ class PlanUpdate(BaseModel):
 
 
 class PlanSummaryResponse(BaseModel):
-    id: int = Field(description="监测计划 ID")
+    """监测计划列表里的一行。"""
+
+    model_config = ConfigDict(title="监测计划")
+
+    id: int = Field(description="计划编号")
     name: str = Field(description="计划名称")
-    status: PlanStatus = Field(description="计划状态：ACTIVE 参与调度、PAUSED 已暂停")
-    schedule_type: ScheduleType = Field(description="调度类型：INTERVAL / RRULE")
-    schedule_expression: str = Field(description="调度表达式")
-    timezone: str = Field(description="IANA 时区名")
-    category_id: int | None = Field(description="资源目录约束；空表示不限")
-    ecological_parameter_ids: list[int] = Field(description="生态参数约束；空列表表示不限")
-    next_run_at: datetime | None = Field(description="下一次计划触发时间（UTC，带时区）")
+    status: PlanStatus = Field(description="是否还在按周期执行")
+    schedule_type: ScheduleType = Field(description="重复方式")
+    schedule_expression: str = Field(description="重复表达式")
+    timezone: str = Field(description="时区名称")
+    category_id: int | None = Field(description="限定的分类编号；不限分类为空")
+    ecological_parameter_ids: list[int] = Field(description="限定的生态参数编号；空数组表示不限")
+    next_run_at: datetime | None = Field(description="下一次计划执行时间，UTC 且带时区")
     last_successful_run_at: datetime | None = Field(
-        description="最近一次成功执行时间（UTC，带时区）；增量窗口以此为锚点"
+        description="最近一次成功执行的时间。下次会从这之后挑选新数据"
     )
-    created_at: datetime = Field(description="创建时间（UTC，带时区）")
-    updated_at: datetime = Field(description="最近更新时间（UTC，带时区）")
+    created_at: datetime = Field(description="创建时间，UTC 且带时区")
+    updated_at: datetime = Field(description="最近一次修改时间，UTC 且带时区")
 
 
 class PlanDetailResponse(PlanSummaryResponse):
+    """监测计划详情，含空间范围。"""
+
+    model_config = ConfigDict(title="监测计划详情")
+
     boundary_geojson: dict[str, Any] | None = Field(
-        default=None, description="监测空间范围，EPSG:4326 GeoJSON"
+        default=None, description="监测范围，经纬度 GeoJSON"
     )
 
 
 class RunResponse(BaseModel):
-    id: int = Field(description="监测执行 ID")
-    plan_id: int = Field(description="所属计划 ID")
-    occurrence_id: int = Field(description="本次触发的稳定标识（计划+计划时刻唯一）")
-    scheduled_for: datetime = Field(description="计划触发时刻（UTC，带时区）")
-    status: RunStatus = Field(
-        description="执行状态：PENDING 待执行、RUNNING 执行中、SUCCEEDED 成功、FAILED 失败"
-    )
-    window_anchor: datetime = Field(description="增量时间窗锚点，通常为上次成功执行时间")
-    job_id: int | None = Field(description="对应的处理任务 ID；尚未派发可为空")
-    started_at: datetime | None = Field(description="实际开始时间（UTC，带时区）")
-    finished_at: datetime | None = Field(description="实际结束时间（UTC，带时区）")
-    diagnostics: dict[str, Any] | None = Field(description="失败或执行诊断")
-    trigger: OccurrenceTrigger = Field(description="触发来源：SCHEDULED 调度、MANUAL 手动")
-    input_count: int = Field(description="冻结的输入资产版本数量")
-    created_at: datetime = Field(description="创建时间（UTC，带时区）")
-    updated_at: datetime = Field(description="最近更新时间（UTC，带时区）")
+    """监测计划的一次执行。"""
+
+    model_config = ConfigDict(title="监测执行")
+
+    id: int = Field(description="这次执行的编号")
+    plan_id: int = Field(description="所属计划编号")
+    occurrence_id: int = Field(description="这次触发的编号。同一计划、同一计划时刻只有一个")
+    scheduled_for: datetime = Field(description="计划中的执行时刻，UTC 且带时区")
+    status: RunStatus = Field(description="这次执行的状态")
+    window_anchor: datetime = Field(description="挑选数据的时间起点，一般是上次成功执行的时间")
+    job_id: int | None = Field(description="对应的后台任务编号；还没开始时可为空")
+    started_at: datetime | None = Field(description="实际开始时间；尚未开始为空")
+    finished_at: datetime | None = Field(description="实际结束时间；尚未结束为空")
+    diagnostics: dict[str, Any] | None = Field(description="失败或执行说明；正常时可为空")
+    trigger: OccurrenceTrigger = Field(description="是到点自动执行，还是页面上手动点的")
+    input_count: int = Field(description="这次选中的资产数量")
+    created_at: datetime = Field(description="记录创建时间，UTC 且带时区")
+    updated_at: datetime = Field(description="最近一次修改时间，UTC 且带时区")
 
 
 class RunInputResponse(BaseModel):
-    id: int = Field(description="输入快照条目 ID")
-    run_id: int = Field(description="所属监测执行 ID")
-    asset_id: int = Field(description="冻结的资产 ID")
-    created_at: datetime = Field(description="快照写入时间（UTC，带时区）")
+    """这次执行选中的一份资产。名单在执行创建后不能改。"""
+
+    model_config = ConfigDict(title="执行选用的资产")
+
+    id: int = Field(description="这条记录的编号")
+    run_id: int = Field(description="所属执行编号")
+    asset_id: int = Field(description="选中的资产编号")
+    created_at: datetime = Field(description="写入时间，UTC 且带时区")
 
 
 class RunTransitionRequest(BaseModel):
-    """Run 状态推进请求体；供监测执行方（未来 Worker/运维接缝）调用。"""
+    """标记执行失败时附带的说明。成功接口可以不传 body。"""
+
+    model_config = ConfigDict(title="执行失败说明")
 
     detail: str | None = Field(
-        default=None, max_length=2000, description="失败诊断说明；成功接口可省略"
+        default=None, max_length=2000, description="失败原因；标记成功时不必传"
     )

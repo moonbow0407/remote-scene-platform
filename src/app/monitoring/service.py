@@ -611,9 +611,7 @@ class MonitoringService:
                 )
             )
         self._session.flush()
-        run.job_id = self._dispatcher.dispatch(
-            self._session, run, [asset.id for asset in versions]
-        )
+        run.job_id = self._dispatcher.dispatch(self._session, run, [asset.id for asset in versions])
         logger.info(
             "监测执行已创建并冻结输入快照",
             extra={

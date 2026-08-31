@@ -5,23 +5,32 @@
 
 from enum import StrEnum
 
+from app.schema_docs import enum_docs
 
+
+@enum_docs(
+    "文件种类",
+    "RASTER：栅格影像（.tif / .tiff）；"
+    "VECTOR：矢量（.zip / .geojson / .gpkg / .shp）；"
+    "ATTACHMENT：其他附件。",
+)
 class AssetType(StrEnum):
-    """物理类型：RASTER 栅格、VECTOR 矢量、ATTACHMENT 附件。"""
-
     RASTER = "RASTER"
     VECTOR = "VECTOR"
     ATTACHMENT = "ATTACHMENT"
 
 
+@enum_docs(
+    "资产状态",
+    "UPLOADING：正在上传文件；"
+    "VALIDATING：正在校验文件；"
+    "PROCESSING：后台处理中，请继续查详情；"
+    "NEEDS_INPUT：缺坐标系，请调用「补充坐标系」；"
+    "READY：处理完成，可下载；栅格还可申请地图地址；"
+    "FAILED：失败，原因见 diagnostics。"
+    "进入回收站不改这个字段，看 deleted_at。",
+)
 class AssetStatus(StrEnum):
-    """资产状态。
-
-    UPLOADING 上传中、VALIDATING 校验中、PROCESSING 处理中、
-    NEEDS_INPUT 待补元数据、READY 可用、FAILED 失败。
-    软删除用 deleted_at，不另占状态值。
-    """
-
     UPLOADING = "UPLOADING"
     VALIDATING = "VALIDATING"
     PROCESSING = "PROCESSING"

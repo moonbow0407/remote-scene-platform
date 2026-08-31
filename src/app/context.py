@@ -9,9 +9,12 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 
+from app.schema_docs import enum_docs
 
+
+@enum_docs("角色", "ADMIN：管理员；USER：普通用户。")
 class ActorRole(StrEnum):
-    """角色：ADMIN 管理员、USER 普通用户。首版不引入动态权限字符串。"""
+    """登录用户角色。"""
 
     ADMIN = "ADMIN"
     USER = "USER"

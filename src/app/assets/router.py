@@ -47,12 +47,7 @@ def _service(session: Annotated[Session, Depends(_get_session)]) -> AssetService
 
 
 def _bbox_of(asset: DataAsset) -> BBox | None:
-    if (
-        asset.min_x is None
-        or asset.min_y is None
-        or asset.max_x is None
-        or asset.max_y is None
-    ):
+    if asset.min_x is None or asset.min_y is None or asset.max_x is None or asset.max_y is None:
         return None
     return BBox(min_x=asset.min_x, min_y=asset.min_y, max_x=asset.max_x, max_y=asset.max_y)
 
@@ -104,23 +99,22 @@ def _detail(service: AssetService, asset: DataAsset) -> AssetDetailResponse:
         has_map=asset.status is AssetStatus.READY
         and asset.asset_type is AssetType.RASTER
         and asset.cog_object_key is not None,
-        has_download=asset.original_object_key is not None
-        and asset.status is AssetStatus.READY,
+        has_download=asset.original_object_key is not None and asset.status is AssetStatus.READY,
     )
 
 
 @router.get(
     "",
     summary="资产列表",
-    description="管理页默认入口。deleted=true 只看回收站。",
+    description="管理页主列表。默认不含回收站。deleted=true 只看回收站里的记录。",
     response_model=Page[AssetListItem],
 )
 def list_assets(
     service: Annotated[AssetService, Depends(_service)],
     pagination: Annotated[PageParams, Depends()],
-    name: Annotated[str | None, Query(description="按名称模糊过滤")] = None,
-    category_id: Annotated[int | None, Query(description="分类 ID")] = None,
-    asset_type: Annotated[AssetType | None, Query(description="物理类型")] = None,
+    name: Annotated[str | None, Query(description="按显示名称模糊查找")] = None,
+    category_id: Annotated[int | None, Query(description="分类编号")] = None,
+    asset_type: Annotated[AssetType | None, Query(description="文件种类")] = None,
     status: Annotated[AssetStatus | None, Query(description="处理状态")] = None,
     deleted: Annotated[bool, Query(description="true 只列出回收站")] = False,
 ) -> Page[AssetListItem]:
@@ -144,10 +138,15 @@ def list_assets(
 @router.get(
     "/{asset_id}",
     summary="资产详情",
+    description=(
+        "查看单个资产。上传完成后用本接口看处理进度：看 status。"
+        "READY 可下载；栅格 READY 后可申请地图地址；"
+        "NEEDS_INPUT 时调用「补充坐标系」。"
+    ),
     response_model=AssetDetailResponse,
 )
 def get_asset(
-    asset_id: Annotated[int, Path(description="资产 ID")],
+    asset_id: Annotated[int, Path(description="资产编号")],
     service: Annotated[AssetService, Depends(_service)],
 ) -> AssetDetailResponse:
     return _detail(service, service.get_asset_required(asset_id))
@@ -156,11 +155,11 @@ def get_asset(
 @router.patch(
     "/{asset_id}",
     summary="更新资产",
-    description="改名称、分类、采集时间。未出现的字段保持不变；分类/采集时间传 null 表示清除。",
+    description="改名称、分类、采集时间。没写的字段保持原值。分类或采集时间传 null 表示清空。",
     response_model=AssetDetailResponse,
 )
 def update_asset(
-    asset_id: Annotated[int, Path(description="资产 ID")],
+    asset_id: Annotated[int, Path(description="资产编号")],
     body: AssetUpdateRequest,
     service: Annotated[AssetService, Depends(_service)],
 ) -> AssetDetailResponse:
@@ -180,10 +179,10 @@ def update_asset(
     "/{asset_id}",
     status_code=204,
     summary="删除资产",
-    description="进入默认 7 天回收站。未完成的入库任务会请求取消。",
+    description="进入回收站，默认 7 天内可恢复。列表和检索会立刻看不到它。未完成的处理会取消。",
 )
 def delete_asset(
-    asset_id: Annotated[int, Path(description="资产 ID")],
+    asset_id: Annotated[int, Path(description="资产编号")],
     request: Request,
     session: Annotated[Session, Depends(_get_session)],
 ) -> None:
@@ -197,10 +196,11 @@ def delete_asset(
 @router.post(
     "/{asset_id}/restore",
     summary="从回收站恢复",
+    description="恢复期内可以找回。过期后无法恢复。",
     response_model=AssetDetailResponse,
 )
 def restore_asset(
-    asset_id: Annotated[int, Path(description="资产 ID")],
+    asset_id: Annotated[int, Path(description="资产编号")],
     session: Annotated[Session, Depends(_get_session)],
 ) -> AssetDetailResponse:
     asset = AssetLifecycleService(session).restore(asset_id)
@@ -210,10 +210,11 @@ def restore_asset(
 @router.get(
     "/{asset_id}/download-url",
     summary="原件下载地址",
+    description="仅处理完成（READY）的资产可申请。返回的地址是临时的，过期后重新申请。",
     response_model=DownloadUrlResponse,
 )
 def download_url(
-    asset_id: Annotated[int, Path(description="资产 ID")],
+    asset_id: Annotated[int, Path(description="资产编号")],
     request: Request,
     service: Annotated[AssetService, Depends(_service)],
 ) -> DownloadUrlResponse:
@@ -229,8 +230,8 @@ def download_url(
 
 @router.post(
     "/search",
-    summary="空间/条件检索",
-    description="地图与监测选数。管理列表请用 GET /assets。",
+    summary="检索资产",
+    description="按范围、种类、状态、分类查找。给地图选数用。管理列表请用「资产列表」。",
     response_model=Page[SearchItem],
 )
 def search(
@@ -273,11 +274,12 @@ def search(
 
 @router.post(
     "/{asset_id}/inputs",
-    summary="补充坐标系并续跑",
+    summary="补充坐标系",
+    description="status 为 NEEDS_INPUT 时调用。补上 EPSG 代码后会继续处理，请再查资产详情。",
     response_model=SubmitInputResponse,
 )
 def submit_input(
-    asset_id: Annotated[int, Path(description="资产 ID")],
+    asset_id: Annotated[int, Path(description="资产编号")],
     body: SubmitInputRequest,
     service: Annotated[AssetService, Depends(_service)],
 ) -> SubmitInputResponse:

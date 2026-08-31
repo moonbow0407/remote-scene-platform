@@ -1,50 +1,77 @@
-"""上传会话 API 模型。"""
+"""上传接口的请求和响应。"""
 
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.assets.enums import AssetType
 from app.uploads.models import UploadSessionStatus
 
 
 class CreateSessionRequest(BaseModel):
-    file_name: str = Field(min_length=1, max_length=512, description="原始文件名，含扩展名")
-    size_bytes: int = Field(gt=0, description="文件总字节数")
-    content_type: str | None = Field(default=None, max_length=128, description="MIME，可省略")
+    """创建一次上传。只需文件名和大小；服务端按大小切分，并返回每片的临时 PUT 地址。"""
+
+    model_config = ConfigDict(title="创建上传")
+
+    file_name: str = Field(
+        min_length=1,
+        max_length=512,
+        description="原始文件名，必须带扩展名。用扩展名判断文件种类",
+        examples=["GF1_PMS_20240101.tif"],
+    )
+    size_bytes: int = Field(gt=0, description="文件总大小，单位字节", examples=[104857600])
+    content_type: str | None = Field(
+        default=None, max_length=128, description="文件 MIME 类型，可不传"
+    )
     asset_type: AssetType | None = Field(
         default=None,
-        description="省略时按扩展名判断：tif 栅格，zip/geojson/gpkg 矢量，其余附件",
+        description="文件种类。不传则按扩展名判断：tif 栅格，zip/geojson/gpkg/shp 矢量，其余附件",
     )
 
 
 class PartUrl(BaseModel):
+    """一片文件对应的临时上传地址。"""
+
+    model_config = ConfigDict(title="分片上传地址")
+
     part_number: int = Field(description="分片序号，从 1 开始")
-    url: str = Field(description="该分片的 MinIO 预签名 PUT 地址")
+    url: str = Field(description="该片的临时 PUT 地址。把这一片的字节直接 PUT 上去，不要经过本服务")
 
 
 class SessionCreatedResponse(BaseModel):
-    session_id: int = Field(description="上传会话 ID")
-    asset_id: int = Field(description="资产 ID，上传完成后轮询 GET /assets/{id}")
-    part_urls: list[PartUrl] = Field(description="各分片预签名上传地址")
-    expires_in_seconds: int = Field(description="预签名 URL 有效期，单位秒")
+    """上传会话已创建。按 part_urls 传完所有分片后，调用「完成上传」。"""
+
+    model_config = ConfigDict(title="上传已创建")
+
+    session_id: int = Field(description="本次上传编号")
+    asset_id: int = Field(description="对应的资产编号。传完后用它请求「资产详情」看处理进度")
+    part_urls: list[PartUrl] = Field(description="每一片的临时 PUT 地址")
+    expires_in_seconds: int = Field(description="这些上传地址的有效时间，单位秒")
 
 
 class UploadedPart(BaseModel):
-    part_number: int
-    size: int
-    etag: str
+    """对象存储里已经收到的一片。"""
+
+    model_config = ConfigDict(title="已上传分片")
+
+    part_number: int = Field(description="分片序号，从 1 开始")
+    size: int = Field(description="这一片的字节数")
+    etag: str = Field(description="存储返回的分片校验值，排查缺片时用")
 
 
 class SessionDetailResponse(BaseModel):
-    session_id: int
-    asset_id: int
-    status: UploadSessionStatus
-    file_name: str
-    size_bytes: int
-    part_count: int
-    uploaded_parts: list[UploadedPart]
-    missing_part_numbers: list[int]
+    """上传进行到哪一步、哪些片还没传。中断后续传时看 missing_part_numbers。"""
+
+    model_config = ConfigDict(title="上传详情")
+
+    session_id: int = Field(description="本次上传编号")
+    asset_id: int = Field(description="对应的资产编号")
+    status: UploadSessionStatus = Field(description="上传状态")
+    file_name: str = Field(description="原始文件名")
+    size_bytes: int = Field(description="文件总大小，单位字节")
+    part_count: int = Field(description="应传的分片总数")
+    uploaded_parts: list[UploadedPart] = Field(description="已经传到存储的分片")
+    missing_part_numbers: list[int] = Field(description="还没传到的分片序号")
 
     @classmethod
     def build(cls, session: Any, uploaded_parts: list[UploadedPart]) -> "SessionDetailResponse":
@@ -64,16 +91,28 @@ class SessionDetailResponse(BaseModel):
 
 
 class PartUrlResponse(BaseModel):
-    part_number: int
-    url: str
-    expires_in_seconds: int
+    """重新签发某一片的临时 PUT 地址。"""
+
+    model_config = ConfigDict(title="补签分片地址")
+
+    part_number: int = Field(description="分片序号，从 1 开始")
+    url: str = Field(description="该片的临时 PUT 地址")
+    expires_in_seconds: int = Field(description="该地址有效时间，单位秒")
 
 
 class SessionCompletedResponse(BaseModel):
-    session_id: int
-    asset_id: int
+    """分片已合并，后台开始处理。接下来轮询 GET /assets/{asset_id}。"""
+
+    model_config = ConfigDict(title="上传完成")
+
+    session_id: int = Field(description="本次上传编号")
+    asset_id: int = Field(description="资产编号，用它查询处理进度")
 
 
 class SessionAbortResponse(BaseModel):
-    session_id: int
-    status: str
+    """这次上传已取消，对应资产会记为失败。"""
+
+    model_config = ConfigDict(title="上传已中止")
+
+    session_id: int = Field(description="本次上传编号")
+    status: str = Field(description="中止后的状态，一般为 ABORTED")

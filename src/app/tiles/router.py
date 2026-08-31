@@ -33,12 +33,12 @@ def _get_session(request: Request) -> Iterator[Session]:
 
 @router.get(
     "/assets/{asset_id}/tile-url",
-    summary="签发瓦片地址",
-    description="仅为 READY 的栅格资产签发短期瓦片 URL。必须经本平台网关访问。",
+    summary="申请地图地址",
+    description="只有处理完成的栅格可以申请。地址带短期令牌，过期后重新申请，不要改主机名。",
     response_model=TileUrlResponse,
 )
 def issue_tile_url(
-    asset_id: Annotated[int, Path(description="资产 ID")],
+    asset_id: Annotated[int, Path(description="资产编号")],
     request: Request,
     session: Annotated[Session, Depends(_get_session)],
 ) -> TileUrlResponse:

@@ -46,7 +46,7 @@ def _token_response(issued: IssuedTokens) -> TokenResponse:
 @auth_router.post(
     "/login",
     summary="登录",
-    description="用用户名或邮箱登录，返回访问令牌与刷新令牌。",
+    description="用用户名或邮箱登录。之后把 access_token 放在 Authorization: Bearer 请求头里。",
     response_model=TokenResponse,
 )
 def login(
@@ -63,7 +63,7 @@ def login(
 @auth_router.post(
     "/refresh",
     summary="刷新令牌",
-    description="用刷新令牌换取新的访问令牌与刷新令牌。",
+    description="访问令牌过期后，用 refresh_token 换一套新的访问令牌和刷新令牌。",
     response_model=TokenResponse,
 )
 def refresh(
@@ -78,7 +78,7 @@ def refresh(
 @auth_router.get(
     "/me",
     summary="当前用户",
-    description="返回持有访问令牌的用户资料，不含密码。",
+    description="返回当前登录用户的资料，不含密码。",
     response_model=UserPublic,
 )
 def me(user: Annotated[User, Depends(get_current_user)]) -> UserPublic:
@@ -88,7 +88,7 @@ def me(user: Annotated[User, Depends(get_current_user)]) -> UserPublic:
 @users_router.get(
     "",
     summary="用户列表",
-    description="分页列出用户。需要管理员。",
+    description="分页列出用户。只有管理员能调。",
     response_model=Page[UserPublic],
 )
 def list_users(
@@ -108,7 +108,7 @@ def list_users(
     "",
     status_code=201,
     summary="创建用户",
-    description="管理员创建账号。首版不提供自助注册。",
+    description="管理员创建账号。没有自助注册。",
     response_model=UserPublic,
 )
 def create_user(
@@ -128,11 +128,11 @@ def create_user(
 @users_router.get(
     "/{user_id}",
     summary="用户详情",
-    description="本人或管理员可查看。",
+    description="本人或管理员可以查看。",
     response_model=UserPublic,
 )
 def get_user(
-    user_id: Annotated[int, Path(description="用户 ID")],
+    user_id: Annotated[int, Path(description="用户编号")],
     actor: Annotated[ActorContext, Depends(get_current_actor)],
     service: Annotated[AuthService, Depends(_service)],
 ) -> UserPublic:
@@ -143,11 +143,11 @@ def get_user(
 @users_router.put(
     "/{user_id}",
     summary="更新用户",
-    description="管理员修改用户名、邮箱、密码或角色。未出现的字段保持不变。",
+    description="管理员改用户名、邮箱、密码或角色。没写的字段保持原值。",
     response_model=UserPublic,
 )
 def update_user(
-    user_id: Annotated[int, Path(description="用户 ID")],
+    user_id: Annotated[int, Path(description="用户编号")],
     body: UserUpdateRequest,
     _admin: Annotated[ActorContext, Depends(require_admin)],
     service: Annotated[AuthService, Depends(_service)],
@@ -165,11 +165,11 @@ def update_user(
 @users_router.patch(
     "/{user_id}/status",
     summary="启用或停用用户",
-    description="管理员启停账号。停用后该用户无法登录。",
+    description="管理员启停账号。停用后该用户立刻无法登录。",
     response_model=UserPublic,
 )
 def set_user_status(
-    user_id: Annotated[int, Path(description="用户 ID")],
+    user_id: Annotated[int, Path(description="用户编号")],
     body: UserStatusRequest,
     admin: Annotated[ActorContext, Depends(require_admin)],
     service: Annotated[AuthService, Depends(_service)],

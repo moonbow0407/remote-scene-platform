@@ -11,9 +11,18 @@
 
 from enum import StrEnum
 
+from app.schema_docs import enum_docs
 
+
+@enum_docs(
+    "任务种类",
+    "RASTER_INGESTION：栅格入库；"
+    "VECTOR_INGESTION：矢量入库；"
+    "ATTACHMENT_INGESTION：附件入库；"
+    "MONITORING_RUN：监测执行。",
+)
 class JobType(StrEnum):
-    """任务类型：栅格入库、矢量入库、附件入库、监测执行。"""
+    """任务种类。"""
 
     RASTER_INGESTION = "RASTER_INGESTION"
     VECTOR_INGESTION = "VECTOR_INGESTION"
@@ -32,13 +41,21 @@ TASK_BY_JOB_TYPE: dict[JobType, str] = {
 }
 
 
+@enum_docs(
+    "任务状态",
+    "PENDING：等待开始；"
+    "QUEUED：已排队；"
+    "RUNNING：正在执行；"
+    "RETRYING：出错后等待重试；"
+    "NEEDS_INPUT：缺坐标系，请去资产上补充；"
+    "SUCCEEDED：成功；"
+    "FAILED：失败；"
+    "CANCEL_REQUESTED：已请求取消，还在收尾；"
+    "CANCELLED：已取消；"
+    "MISSED：该周期没有实际执行。",
+)
 class JobStatus(StrEnum):
-    """任务状态。
-
-    PENDING 待投递、QUEUED 已入队、RUNNING 执行中、RETRYING 退避重试、
-    NEEDS_INPUT 待补输入、SUCCEEDED 成功、FAILED 失败、
-    CANCEL_REQUESTED 取消中、CANCELLED 已取消、MISSED 错过周期。
-    """
+    """后台任务状态。"""
 
     PENDING = "PENDING"
     QUEUED = "QUEUED"

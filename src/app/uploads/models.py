@@ -8,10 +8,15 @@ from sqlalchemy import ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base, TimestampMixin
+from app.schema_docs import enum_docs
 
 
+@enum_docs(
+    "上传状态",
+    "PENDING：还在传分片；COMPLETED：已合并并开始处理；ABORTED：已中止。",
+)
 class UploadSessionStatus(StrEnum):
-    """PENDING 等待分片、COMPLETED 已完成、ABORTED 已中止。"""
+    """上传会话状态。"""
 
     PENDING = "PENDING"
     COMPLETED = "COMPLETED"

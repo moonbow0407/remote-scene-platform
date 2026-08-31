@@ -94,28 +94,37 @@ def create_app() -> FastAPI:
         title="多源遥感数据共享平台",
         version="0.1.0",
         description=(
-            "业务前缀一律 `/api/v1`。成功响应直接返回资源，没有 `{code,msg,data}` 信封；"
-            "分页固定为 `items` / `total` / `page` / `page_size`；"
-            "错误为 RFC 9457 `application/problem+json`。"
-            "空间输入只接受 EPSG:4326 的 GeoJSON Polygon 或 MultiPolygon。"
-            "大文件经预签名直传 MinIO，字节不经过本 API。"
+            "路径都以 `/api/v1` 开头。\n\n"
+            "成功时直接返回资源对象，没有 `code` / `msg` / `data` 外层包装。\n"
+            "列表一律是 `items`、`total`、`page`、`page_size`。\n"
+            "出错时 HTTP 状态码不是 200，类型是 `application/problem+json`，请看 `code`。\n"
+            "时间一律带时区。\n"
+            "空间范围只接受经纬度（EPSG:4326）的 GeoJSON 多边形（Polygon 或 MultiPolygon）。\n"
+            "大文件用返回的临时地址直传，不要把文件字节 POST 到本服务。\n"
+            "上传完成后轮询「资产详情」的 `status`，不要轮询任务接口。"
         ),
         lifespan=_lifespan,
         servers=[
             {"url": settings.public_base_url.rstrip("/"), "description": "当前环境 API 基地址"},
         ],
         openapi_tags=[
-            {"name": "运维", "description": "存活、就绪、指标"},
-            {"name": "鉴权", "description": "登录、刷新令牌、当前用户"},
-            {"name": "用户", "description": "管理员建号、改资料、启停账号"},
-            {"name": "上传", "description": "MinIO 分片上传会话；文件不经 API"},
-            {"name": "资产", "description": "资产列表、详情、检索、补坐标系、删除恢复"},
-            {"name": "任务", "description": "入库/监测任务进度与取消（管理页请轮询资产）"},
-            {"name": "瓦片", "description": "短期瓦片令牌，经网关 /tiles/ 访问"},
-            {"name": "矢量要素", "description": "PostGIS 要素空间检索"},
-            {"name": "分类", "description": "平铺业务分类"},
-            {"name": "生态", "description": "生态参数及其与资源目录的映射"},
-            {"name": "监测", "description": "监测计划、调度执行与不可变输入快照"},
+            {"name": "运维", "description": "进程是否存活、依赖是否就绪。前端一般不用。"},
+            {"name": "鉴权", "description": "登录、刷新令牌、查看当前用户。"},
+            {"name": "用户", "description": "管理员创建账号、改资料、停用账号。"},
+            {
+                "name": "上传",
+                "description": "大文件分片直传。创建会话 → PUT 各分片 → 完成上传 → 轮询资产详情。",
+            },
+            {
+                "name": "资产",
+                "description": "一份上传文件及其处理状态。管理列表用 GET /assets；地图选数用检索。",
+            },
+            {"name": "任务", "description": "后台处理进度。管理页面请看资产状态，不必调这里。"},
+            {"name": "瓦片", "description": "栅格在地图上显示用的短期地址。过期后重新申请。"},
+            {"name": "矢量要素", "description": "在一份矢量资产里按多边形查要素。"},
+            {"name": "分类", "description": "平铺分类，例如卫星影像、无人机影像。没有上下级。"},
+            {"name": "生态", "description": "生态参数，以及它和分类的对应关系。"},
+            {"name": "监测", "description": "按范围和周期自动挑选已处理完成的数据并执行。"},
         ],
         openapi_url=f"{API_V1_PREFIX}/openapi.json",
         docs_url=f"{API_V1_PREFIX}/docs",
@@ -154,22 +163,32 @@ def create_app() -> FastAPI:
         components = schema.setdefault("components", {}).setdefault("schemas", {})
         components["ProblemDetails"] = {
             "type": "object",
-            "description": "RFC 9457 错误体。业务失败不会包装成 HTTP 200。",
+            "title": "错误信息",
+            "description": "出错时的响应体。HTTP 状态码不是 200。请根据 code 判断错误类型。",
             "required": ["type", "title", "status", "code"],
             "properties": {
-                "type": {"type": "string", "description": "问题类型 URI，本平台固定 about:blank"},
-                "title": {"type": "string", "description": "人可读的错误标题"},
+                "type": {"type": "string", "description": "固定为 about:blank，可忽略"},
+                "title": {"type": "string", "description": "简短错误标题"},
                 "status": {"type": "integer", "description": "HTTP 状态码"},
-                "code": {"type": "string", "description": "稳定业务错误码，客户端按此分支处理"},
-                "detail": {"type": "string", "description": "详细说明"},
-                "trace_id": {"type": "string", "description": "请求追踪 ID，排查问题时提供给后端"},
+                "code": {
+                    "type": "string",
+                    "description": "错误码，例如 REQUEST_VALIDATION。前端按这个分支处理",
+                },
+                "detail": {"type": "string", "description": "更具体的说明"},
+                "trace_id": {
+                    "type": "string",
+                    "description": "这次请求的追踪编号，报障时带给后端",
+                },
                 "errors": {
                     "type": "array",
                     "items": {"type": "object"},
-                    "description": "字段级校验错误列表，多见于 422",
+                    "description": "哪个字段不合法，多见于 422",
                 },
             },
         }
+        for model in components.values():
+            if model.get("title") == "分页结果" and not model.get("description"):
+                model["description"] = "一页数据。所有列表都是这个结构。"
         problem_content = {
             "application/problem+json": {"schema": {"$ref": "#/components/schemas/ProblemDetails"}}
         }
@@ -178,9 +197,9 @@ def create_app() -> FastAPI:
                 if method not in {"get", "post", "put", "patch", "delete"}:
                     continue
                 responses = operation.setdefault("responses", {})
-                responses["422"] = {"description": "请求或领域校验失败", "content": problem_content}
+                responses["422"] = {"description": "请求参数不合法", "content": problem_content}
                 responses.setdefault(
-                    "500", {"description": "未处理的服务端错误", "content": problem_content}
+                    "500", {"description": "服务器内部错误", "content": problem_content}
                 )
         app.openapi_schema = schema
         return schema

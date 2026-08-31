@@ -192,7 +192,8 @@ def upgrade() -> None:
         "ALTER TABLE monitoring_run_input DROP CONSTRAINT IF EXISTS "
         "fk_monitoring_run_input_asset_version_id_asset_version"
     )
-    op.execute("DROP INDEX IF EXISTS uq_monitoring_run_input_version")
+    # PostgreSQL 把 UniqueConstraint 做成约束+同名唯一索引，必须先删约束；
+    # 直接 DROP INDEX 会报 DependentObjectsStillExist。
     op.execute(
         "ALTER TABLE monitoring_run_input DROP CONSTRAINT IF EXISTS uq_monitoring_run_input_version"
     )

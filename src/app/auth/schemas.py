@@ -1,4 +1,4 @@
-"""鉴权与用户管理 API 模型。响应绝不包含 password 或 password_hash。"""
+"""登录和用户接口的请求和响应。响应里不会出现密码。"""
 
 import re
 from datetime import datetime
@@ -34,42 +34,62 @@ def _validate_password(value: str) -> str:
 
 
 class LoginRequest(BaseModel):
-    """登录标识可以是 username 或 email。"""
+    """用用户名或邮箱登录。"""
+
+    model_config = ConfigDict(title="登录")
 
     username: str = Field(min_length=1, max_length=255, description="用户名或邮箱")
     password: str = Field(min_length=1, max_length=128, description="登录密码")
 
 
 class RefreshRequest(BaseModel):
-    refresh_token: str = Field(min_length=1, description="刷新令牌，由登录接口返回")
+    """用刷新令牌换一套新令牌。"""
+
+    model_config = ConfigDict(title="刷新令牌")
+
+    refresh_token: str = Field(min_length=1, description="登录时返回的刷新令牌")
 
 
 class TokenResponse(BaseModel):
-    access_token: str = Field(description="访问令牌，请求受保护接口时放在 Authorization: Bearer")
-    refresh_token: str = Field(description="刷新令牌，用于换取新的访问令牌")
-    token_type: str = Field(default="Bearer", description="令牌类型，固定 Bearer")
-    expires_in: int = Field(description="访问令牌有效期，单位秒")
+    """登录或刷新成功后的令牌。"""
+
+    model_config = ConfigDict(title="令牌")
+
+    access_token: str = Field(
+        description="访问令牌。调用需要登录的接口时放在请求头 Authorization: Bearer <token>"
+    )
+    refresh_token: str = Field(description="刷新令牌。访问令牌过期后，用它换新的一对令牌")
+    token_type: str = Field(default="Bearer", description="令牌类型，固定为 Bearer")
+    expires_in: int = Field(description="访问令牌有效时间，单位秒")
 
 
 class UserPublic(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+    """用户资料，不含密码。"""
 
-    id: int = Field(description="用户 ID")
+    model_config = ConfigDict(title="用户", from_attributes=True)
+
+    id: int = Field(description="用户编号")
     username: str = Field(description="登录用户名")
     email: str = Field(description="邮箱")
-    role: ActorRole = Field(description="角色：ADMIN 管理员、USER 普通用户")
-    is_active: bool = Field(description="是否启用；false 后无法登录")
-    created_at: datetime = Field(description="创建时间（UTC，带时区）")
-    updated_at: datetime = Field(description="最近更新时间（UTC，带时区）")
+    role: ActorRole = Field(description="角色")
+    is_active: bool = Field(description="是否允许登录。false 表示已停用")
+    created_at: datetime = Field(description="创建时间，UTC 且带时区")
+    updated_at: datetime = Field(description="最近一次修改时间，UTC 且带时区")
 
 
 class UserCreateRequest(BaseModel):
+    """管理员新建账号。没有自助注册。"""
+
+    model_config = ConfigDict(title="创建用户")
+
     username: str = Field(
-        min_length=3, max_length=64, description="登录用户名，3–64 字符，字母或数字开头"
+        min_length=3,
+        max_length=64,
+        description="登录用户名，3–64 个字符，字母或数字开头",
     )
-    email: str = Field(min_length=3, max_length=255, description="邮箱，全局唯一")
-    password: str = Field(min_length=8, max_length=128, description="初始密码，8–128 字符")
-    role: ActorRole = Field(default=ActorRole.USER, description="角色：ADMIN 管理员、USER 普通用户")
+    email: str = Field(min_length=3, max_length=255, description="邮箱，全局不能重复")
+    password: str = Field(min_length=8, max_length=128, description="初始密码，8–128 个字符")
+    role: ActorRole = Field(default=ActorRole.USER, description="角色，默认普通用户")
 
     @field_validator("username")
     @classmethod
@@ -88,16 +108,20 @@ class UserCreateRequest(BaseModel):
 
 
 class UserUpdateRequest(BaseModel):
+    """管理员改资料。没写的字段保持原值，至少改一项。"""
+
+    model_config = ConfigDict(title="更新用户")
+
     username: str | None = Field(
-        default=None, min_length=3, max_length=64, description="新用户名；省略表示不改"
+        default=None, min_length=3, max_length=64, description="新用户名；不传则不改"
     )
     email: str | None = Field(
-        default=None, min_length=3, max_length=255, description="新邮箱；省略表示不改"
+        default=None, min_length=3, max_length=255, description="新邮箱；不传则不改"
     )
     password: str | None = Field(
-        default=None, min_length=8, max_length=128, description="新密码；省略表示不改"
+        default=None, min_length=8, max_length=128, description="新密码；不传则不改"
     )
-    role: ActorRole | None = Field(default=None, description="新角色；省略表示不改")
+    role: ActorRole | None = Field(default=None, description="新角色；不传则不改")
 
     @field_validator("username")
     @classmethod
@@ -127,4 +151,8 @@ class UserUpdateRequest(BaseModel):
 
 
 class UserStatusRequest(BaseModel):
-    is_active: bool = Field(description="是否启用；false 立即禁止该用户登录")
+    """启用或停用账号。"""
+
+    model_config = ConfigDict(title="启停用户")
+
+    is_active: bool = Field(description="true 启用，false 立即禁止该用户登录")

@@ -1,49 +1,50 @@
-"""任务查询 API 模型。"""
+"""后台任务查询。管理页面请轮询资产状态，不必使用本接口。"""
 
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.jobs.enums import JobStatus, JobType
 
 
 class JobEventItem(BaseModel):
-    event_type: str = Field(description="事件类型，如状态迁移、重试、取消")
-    from_status: JobStatus | None = Field(description="变更前状态；创建事件可为空")
-    to_status: JobStatus | None = Field(description="变更后状态")
-    detail: dict[str, Any] | None = Field(description="事件附加信息，如失败诊断 JSON")
-    created_at: datetime = Field(description="事件时间（UTC，带时区）")
+    """任务状态变化的一条记录。"""
+
+    model_config = ConfigDict(title="任务事件")
+
+    event_type: str = Field(description="事件种类，例如改状态、重试、取消")
+    from_status: JobStatus | None = Field(description="变化前的状态；刚创建时可为空")
+    to_status: JobStatus | None = Field(description="变化后的状态")
+    detail: dict[str, Any] | None = Field(description="附加说明，失败时可能含错误信息")
+    created_at: datetime = Field(description="发生时间，UTC 且带时区")
 
 
 class JobResponse(BaseModel):
-    job_id: int = Field(description="任务 ID")
-    job_type: JobType = Field(
-        description="任务类型：RASTER_INGESTION 栅格入库、VECTOR_INGESTION 矢量入库、"
-        "ATTACHMENT_INGESTION 附件入库、MONITORING_RUN 监测执行"
-    )
-    status: JobStatus = Field(
-        description="任务状态：PENDING 待投递、QUEUED 已入队、RUNNING 执行中、RETRYING 退避重试、"
-        "NEEDS_INPUT 待补输入、SUCCEEDED 成功、FAILED 失败、CANCEL_REQUESTED 取消中、"
-        "CANCELLED 已取消、MISSED 错过周期"
-    )
-    attempt: int = Field(description="当前尝试次数，首次为 0")
-    max_attempts: int = Field(description="最大尝试次数")
-    payload: dict[str, Any] = Field(description="任务参数快照，如资产版本 ID")
-    last_error: dict[str, Any] | None = Field(
-        description="最近一次失败诊断 JSON，含 code / detail / transient；成功时为空"
-    )
-    queued_at: datetime | None = Field(description="进入队列时间（UTC，带时区）")
-    started_at: datetime | None = Field(description="开始执行时间（UTC，带时区）")
-    finished_at: datetime | None = Field(description="结束时间（UTC，带时区）")
-    events: list[JobEventItem] = Field(description="状态事件时间线，最多 200 条")
-    poll_hint: str = Field(description="建议的轮询地址，客户端可忽略")
+    """一条后台任务的进度。"""
+
+    model_config = ConfigDict(title="任务详情")
+
+    job_id: int = Field(description="任务编号")
+    job_type: JobType = Field(description="任务种类")
+    status: JobStatus = Field(description="当前状态")
+    attempt: int = Field(description="已经尝试的次数，第一次为 0")
+    max_attempts: int = Field(description="最多尝试几次")
+    payload: dict[str, Any] = Field(description="任务参数。入库任务里会有 asset_id")
+    last_error: dict[str, Any] | None = Field(description="最近一次失败说明；成功时为空")
+    queued_at: datetime | None = Field(description="进入队列的时间；尚未排队为空")
+    started_at: datetime | None = Field(description="开始执行的时间；尚未开始为空")
+    finished_at: datetime | None = Field(description="结束时间；尚未结束为空")
+    events: list[JobEventItem] = Field(description="状态变化记录，最多 200 条")
+    poll_hint: str = Field(description="建议的再次查询地址，可以忽略")
 
 
 class CancelJobResponse(BaseModel):
-    job_id: int = Field(description="任务 ID")
+    """取消任务后的状态。"""
+
+    model_config = ConfigDict(title="取消任务结果")
+
+    job_id: int = Field(description="任务编号")
     status: JobStatus = Field(
-        description=(
-            "取消后的状态：排队任务为 CANCELLED；运行中为 CANCEL_REQUESTED，稍后在检查点收敛"
-        ),
+        description="取消后的状态。还在排队的会变成 CANCELLED；已经在跑的先变成 CANCEL_REQUESTED"
     )

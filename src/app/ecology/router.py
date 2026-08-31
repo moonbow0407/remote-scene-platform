@@ -48,6 +48,7 @@ def _mapping_response(row: object) -> MappingResponse:
 @router.get(
     "/parameters",
     summary="生态参数列表",
+    description="平铺列出生态参数，可用状态、父节点、编码过滤。",
     response_model=Page[EcologicalParameterResponse],
 )
 def list_parameters(
@@ -55,11 +56,11 @@ def list_parameters(
     service: Annotated[EcologyService, Depends(_get_service)],
     status: Annotated[
         EcologicalParameterStatus | None,
-        Query(description="启用状态：ACTIVE / DISABLED；省略不过滤"),
+        Query(description="按是否启用过滤；不传则不限"),
     ] = None,
-    parent_id: Annotated[int | None, Query(description="父参数 ID；省略不过滤")] = None,
-    code: Annotated[str | None, Query(max_length=64, description="业务编码精确匹配")] = None,
-    root_only: Annotated[bool, Query(description="true 时只返回根节点")] = False,
+    parent_id: Annotated[int | None, Query(description="父参数编号；不传则不限")] = None,
+    code: Annotated[str | None, Query(max_length=64, description="业务编码，精确匹配")] = None,
+    root_only: Annotated[bool, Query(description="true 时只返回顶层参数")] = False,
 ) -> Page[EcologicalParameterResponse]:
     page = service.list_parameters(
         params, status=status, parent_id=parent_id, code=code, root_only=root_only
@@ -70,12 +71,13 @@ def list_parameters(
 @router.get(
     "/parameters/tree",
     summary="生态参数树",
+    description="按父子关系嵌套返回，给树形选择器用。",
     response_model=list[EcologicalParameterTreeNode],
 )
 def parameter_tree(
     service: Annotated[EcologyService, Depends(_get_service)],
     status: Annotated[
-        EcologicalParameterStatus | None, Query(description="按启用状态过滤；省略返回全部")
+        EcologicalParameterStatus | None, Query(description="按是否启用过滤；不传则返回全部")
     ] = None,
 ) -> list[EcologicalParameterTreeNode]:
     return service.parameter_tree(status=status)
@@ -87,7 +89,7 @@ def parameter_tree(
     response_model=EcologicalParameterResponse,
 )
 def get_parameter(
-    parameter_id: Annotated[int, Path(description="生态参数 ID")],
+    parameter_id: Annotated[int, Path(description="生态参数编号")],
     service: Annotated[EcologyService, Depends(_get_service)],
 ) -> EcologicalParameterResponse:
     return _parameter_response(service.get_parameter_required(parameter_id))
@@ -97,6 +99,7 @@ def get_parameter(
     "/parameters",
     status_code=201,
     summary="创建生态参数",
+    description="编码全局不能重复。不填父参数就是顶层。",
     response_model=EcologicalParameterResponse,
 )
 def create_parameter(
@@ -109,11 +112,11 @@ def create_parameter(
 @router.put(
     "/parameters/{parameter_id}",
     summary="更新生态参数",
-    description="未出现的字段保持不变。parent_id 传 null 表示升为根节点。",
+    description="没写的字段保持原值。parent_id 传 null 表示升到顶层。",
     response_model=EcologicalParameterResponse,
 )
 def update_parameter(
-    parameter_id: Annotated[int, Path(description="生态参数 ID")],
+    parameter_id: Annotated[int, Path(description="生态参数编号")],
     body: EcologicalParameterUpdate,
     service: Annotated[EcologyService, Depends(_get_service)],
 ) -> EcologicalParameterResponse:
@@ -125,10 +128,10 @@ def update_parameter(
     "/parameters/{parameter_id}",
     status_code=204,
     summary="删除生态参数",
-    description="有子节点或仍被映射引用时会拒绝删除。",
+    description="还有子参数，或仍有分类对应关系时，不能删除。",
 )
 def delete_parameter(
-    parameter_id: Annotated[int, Path(description="生态参数 ID")],
+    parameter_id: Annotated[int, Path(description="生态参数编号")],
     service: Annotated[EcologyService, Depends(_get_service)],
 ) -> None:
     get_actor()
@@ -141,14 +144,14 @@ def delete_parameter(
 @router.get(
     "/mappings",
     summary="生态映射列表",
-    description="生态参数与资源目录的多对多关系。",
+    description="生态参数和分类的对应关系。",
     response_model=Page[MappingResponse],
 )
 def list_mappings(
     params: Annotated[PageParams, Depends()],
     service: Annotated[EcologyService, Depends(_get_service)],
-    ecological_parameter_id: Annotated[int | None, Query(description="按生态参数过滤")] = None,
-    category_id: Annotated[int | None, Query(description="按分类过滤")] = None,
+    ecological_parameter_id: Annotated[int | None, Query(description="按生态参数编号过滤")] = None,
+    category_id: Annotated[int | None, Query(description="按分类编号过滤")] = None,
 ) -> Page[MappingResponse]:
     page = service.list_mappings(
         params,
@@ -161,7 +164,7 @@ def list_mappings(
 @router.post(
     "/mappings/batch",
     summary="批量创建生态映射",
-    description="已存在的关系幂等保留，不报冲突。",
+    description="一次提交多条。已经存在的对应关系不会报错，会在 existing 里原样返回。",
     response_model=MappingBatchResponse,
 )
 def create_mappings_batch(
@@ -177,7 +180,7 @@ def create_mappings_batch(
     response_model=MappingResponse,
 )
 def get_mapping(
-    mapping_id: Annotated[int, Path(description="映射 ID")],
+    mapping_id: Annotated[int, Path(description="对应关系编号")],
     service: Annotated[EcologyService, Depends(_get_service)],
 ) -> MappingResponse:
     return _mapping_response(service.get_mapping_required(mapping_id))
@@ -187,7 +190,7 @@ def get_mapping(
     "/mappings",
     status_code=201,
     summary="创建生态映射",
-    description="将一个生态参数关联到一个资源目录节点。重复关系返回已有记录。",
+    description="把一个生态参数对应到一个分类。已经存在时返回原记录，不报错。",
     response_model=MappingResponse,
 )
 def create_mapping(
@@ -200,10 +203,11 @@ def create_mapping(
 @router.put(
     "/mappings/{mapping_id}",
     summary="更新生态映射",
+    description="改这条对应关系所指向的生态参数或分类。",
     response_model=MappingResponse,
 )
 def update_mapping(
-    mapping_id: Annotated[int, Path(description="映射 ID")],
+    mapping_id: Annotated[int, Path(description="对应关系编号")],
     body: MappingCreate,
     service: Annotated[EcologyService, Depends(_get_service)],
 ) -> MappingResponse:
@@ -215,9 +219,10 @@ def update_mapping(
     "/mappings/{mapping_id}",
     status_code=204,
     summary="删除生态映射",
+    description="只删除这条对应关系，不删除生态参数或分类本身。",
 )
 def delete_mapping(
-    mapping_id: Annotated[int, Path(description="映射 ID")],
+    mapping_id: Annotated[int, Path(description="对应关系编号")],
     service: Annotated[EcologyService, Depends(_get_service)],
 ) -> None:
     get_actor()
