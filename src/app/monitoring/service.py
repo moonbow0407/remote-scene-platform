@@ -272,7 +272,7 @@ class MonitoringService:
     def delete_plan(self, plan_id: int) -> None:
         """物理删除计划（关联 occurrence/Run/快照随数据库级联删除）。
 
-        软删除与 7 天恢复期按阶段方案属 Stage 6 统一生命周期，本阶段不引入。
+        软删除与 7 天恢复期仅用于资产；计划删除为物理删除。
         """
         plan = self.get_plan_required(plan_id)
         self._session.delete(plan)

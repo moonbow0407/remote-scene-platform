@@ -1,4 +1,4 @@
-"""Stage 6 运维指标采集：PostgreSQL 业务状态为权威，RabbitMQ 只补充队列深度。"""
+"""运维指标采集：PostgreSQL 业务状态为权威，RabbitMQ 只补充队列深度。"""
 
 from __future__ import annotations
 

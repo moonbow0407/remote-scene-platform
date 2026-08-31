@@ -1,4 +1,4 @@
-"""资产 properties 的 JSON Schema 注册与校验（Stage 3）。
+"""资产 properties 的 JSON Schema 注册与校验。
 
 首版只实现对象/基本类型/required/additionalProperties 子集，足够约束业务元数据。
 完整 Draft 校验器不引入额外依赖。

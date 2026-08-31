@@ -95,7 +95,7 @@ def main() -> None:
             try:
                 if not _table_exists(engine, _PLAN_TABLE):
                     logger.info(
-                        "等待 monitoring_plan 表（Stage 5 迁移创建）", extra={"table": _PLAN_TABLE}
+                        "等待 monitoring_plan 表（迁移尚未执行）", extra={"table": _PLAN_TABLE}
                     )
                     time.sleep(_POLL_SECONDS)
                     continue

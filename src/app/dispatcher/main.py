@@ -1,6 +1,6 @@
 """Outbox Dispatcher：认领 Outbox 事件并至少一次投递到 RabbitMQ。
 
-可靠性设计（AGENTS.md §3.5）：
+可靠性设计：
 - 认领使用 FOR UPDATE SKIP LOCKED + 认领 TTL，多 Dispatcher 并发安全；
 - 陈旧认领（Dispatcher 崩溃后超时）自动回收重投；
 - 发布失败按指数退避回退为 PENDING；成功后 Job 推进为 QUEUED；
@@ -90,7 +90,7 @@ def main() -> None:
             try:
                 if not _table_exists(engine, _OUTBOX_TABLE):
                     logger.info(
-                        "等待 outbox_event 表（Stage 2 迁移创建）", extra={"table": _OUTBOX_TABLE}
+                        "等待 outbox_event 表（迁移尚未执行）", extra={"table": _OUTBOX_TABLE}
                     )
                     time.sleep(_POLL_SECONDS)
                     continue

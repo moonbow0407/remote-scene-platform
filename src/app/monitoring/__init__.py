@@ -1,4 +1,4 @@
-"""监测模块：监测计划、调度、执行与输入快照（Stage 5）。"""
+"""监测模块：监测计划、调度、执行与输入快照。"""
 
 from app.monitoring.enums import (
     OccurrenceStatus,

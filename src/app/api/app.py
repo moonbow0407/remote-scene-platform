@@ -3,7 +3,7 @@
 边界约定：
 - 本进程不安装 GDAL 与科学计算栈；地理处理属于 Geo Worker 镜像；
 - 错误统一映射为 RFC 9457 `application/problem+json`，业务失败不返回 200；
-- 业务路由随各阶段（Stage 2+）按模块注册，此处不预留占位路由。
+- 业务路由按模块注册，此处不预留占位路由。
 """
 
 import logging

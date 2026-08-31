@@ -1,7 +1,7 @@
 """生成 Stage 0 定义的测试夹具（合成数据，小体积，含真实 CRS/波段/几何元数据）。
 
 用法：uv run python scripts/make_fixtures.py
-X6 GeoPackage 由 worker 镜像内的 ogr2ogr 生成（见 README/验收基线），不在此脚本内。
+X6 GeoPackage 由 worker 镜像内的 ogr2ogr 生成，不在此脚本内。
 """
 
 import json
