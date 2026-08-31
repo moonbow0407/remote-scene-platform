@@ -25,16 +25,16 @@ MinIO 保存不可变对象，RabbitMQ 仅负责消息传递，TiTiler 由 Nginx
 | --- | --- | --- |
 | **Stage 0** 旧接口盘点与验收基线 | 已完成 | 55 个旧端点迁移矩阵、缺陷清单、夹具规格与人工验收脚本，现位于 `doc/` |
 | **Stage 1** 可运行骨架 | 已完成 | Python 3.12 / `uv` 依赖分组、API 与 Worker 分镜像、Compose、RFC 9457、分页、探针、结构化日志、Alembic `0001`（PostGIS） |
-| **Stage 2** 栅格纵向闭环 | 主体已落地 | 上传 → Outbox → Worker → COG → PostGIS → 瓦片令牌。关闭与否以 A2.1–A2.10 为准 |
-| **Stage 3** 矢量与附件 | 主体已落地 | 同一资产生命周期上 GeoJSON/Shapefile/GPKG 导入、附件 READY、要素空间检索、JSON Schema。关闭与否以 A3.1–A3.5 为准 |
+| **Stage 2** 栅格纵向闭环 | 已完成 | 上传 → Outbox → Worker → COG → PostGIS → 瓦片令牌。集成测试（完成幂等、重复投递、竞争收敛）与真实哨兵一号影像全链路人工验证通过，2026-08-31 验收关闭 |
+| **Stage 3** 矢量与附件 | 已完成 | 同一资产生命周期上 GeoJSON/Shapefile/GPKG 导入、附件 READY、要素空间检索、JSON Schema。2026-08-31 验收关闭 |
 | **Stage 4** 目录与生态映射 | 已完成 | 分类与生态映射；后改为平铺分类（无树、无卫星/传感器表）。A4.1–A4.3 已在 Compose 上通过 |
-| **Stage 5** 监测计划与调度 | 主体已落地 | 计划/occurrence/执行/输入快照模型，RRULE 与固定间隔，Scheduler 互斥锁与停机补跑，增量资产选择，不可变输入快照；执行经 Job(MONITORING_RUN)+Outbox→RabbitMQ→Geo Worker 快照审计闭环。真实 Broker/Worker 全链路集成测试通过；A5.1–A5.5 人工验收待 Compose 执行 |
-| **Stage 6** 生命周期与可靠性 | 主体已落地 | 软删除/7 天恢复、异步物理清理与共享 blob 保护、MinIO 退避删除；任务租约/取消检查点/软硬时限/临时盘预检；队列、Job、Worker、存储指标与 Grafana 面板。关闭与否以 A6.1–A6.4 为准 |
+| **Stage 5** 监测计划与调度 | 已完成 | 计划/occurrence/执行/输入快照模型，RRULE 与固定间隔，Scheduler 互斥锁与停机补跑，增量资产选择，不可变输入快照；执行经 Job(MONITORING_RUN)+Outbox→RabbitMQ→Geo Worker 快照审计闭环。真实 Broker/Worker 全链路集成测试通过，2026-08-31 验收关闭 |
+| **Stage 6** 生命周期与可靠性 | 已完成 | 软删除/7 天恢复、异步物理清理与共享 blob 保护、MinIO 退避删除；任务租约/取消检查点/软硬时限/临时盘预检；队列、Job、Worker、存储指标与 Grafana 面板。过期清理集成测试通过，2026-08-31 验收关闭 |
 | **Stage 7** 迁移收口 | 进行中 | 57 项矩阵静态核对、OpenAPI RFC 9457 契约、发布/备份/排障与前端接入文档已落地；A7.2 干净 Compose 全量验收仍是关闭门禁 |
 
-**当前工作：Stage 6 主体实现与 Stage 7 静态收口已落地；正在执行 A1–A6 干净 Compose 验收，未通过前不宣称 Stage 6/7 已完成。**
+**当前工作：Stage 1–6 已全部验收关闭（Stage 2/3/5/6 于 2026-08-31 依据集成测试全绿与真实影像全链路人工验证判定通过）；仅剩 Stage 7 收口，A7.2 干净 Compose 环境全量重放是最后的关闭门禁。**
 
-## 已交付能力（截至 Stage 6 主体与 Stage 7 静态收口）
+## 已交付能力（截至 Stage 6 验收关闭与 Stage 7 静态收口）
 
 对外入口：`http://localhost:8080`，业务 API 前缀 `/api/v1`。
 
@@ -168,7 +168,7 @@ tests/integration/  # 高风险边界集成测试（需显式基础设施）
 tests/fixtures/     # 人工验收夹具
 ```
 
-尚未关闭：Stage 2/3/5 的剩余人工场景、A6.1–A6.4 与 A7.2 干净环境全量重放；
+尚未关闭：仅剩 Stage 7 的 A7.2 干净环境全量重放；
 2–100 GB 代表性演练受实际硬件容量约束。监测算法类工作负载（生态参数计算）按
 AGENTS.md 约束不在首版范围，当前执行语义为输入快照执行期审计。
 
