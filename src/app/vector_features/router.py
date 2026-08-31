@@ -4,7 +4,7 @@ from collections.abc import Iterator
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Path, Request
 from sqlalchemy.orm import Session
 
 from app.assets.enums import AssetType, AssetVersionStatus
@@ -24,10 +24,15 @@ def _get_session(request: Request) -> Iterator[Session]:
         yield session
 
 
-@router.post("/{asset_id}/versions/{version_id}/features/search", response_model=Page[FeatureItem])
+@router.post(
+    "/{asset_id}/versions/{version_id}/features/search",
+    summary="检索矢量要素",
+    description="仅 READY 的矢量版本可用。范围必须是 EPSG:4326 的 Polygon 或 MultiPolygon。",
+    response_model=Page[FeatureItem],
+)
 def search_features(
-    asset_id: UUID,
-    version_id: UUID,
+    asset_id: Annotated[UUID, Path(description="逻辑资产 ID")],
+    version_id: Annotated[UUID, Path(description="资产版本 ID")],
     body: FeatureSearchRequest,
     session: Annotated[Session, Depends(_get_session)],
 ) -> Page[FeatureItem]:
@@ -39,7 +44,7 @@ def search_features(
     if asset.asset_type is not AssetType.VECTOR:
         raise validation_error("只有矢量资产支持要素检索")
     try:
-        geometry_wkt = geojson_to_wkt(body.geometry)
+        geometry_wkt = geojson_to_wkt(body.spatial_geojson)
     except GeometryValidationError as exc:
         raise validation_error(str(exc)) from exc
     rows, total = VectorFeatureService(session).search(
@@ -52,7 +57,7 @@ def search_features(
         FeatureItem(
             id=feature.id,
             asset_version_id=feature.asset_version_id,
-            geometry=geojson,
+            spatial_geojson=geojson,
             properties=feature.properties,
         )
         for feature, geojson in rows

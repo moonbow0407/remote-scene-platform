@@ -3,7 +3,7 @@
 from typing import Annotated
 
 from fastapi import Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 # page_size 上限防止一次性拉取超大列表拖垮 API 与数据库
 MAX_PAGE_SIZE = 200
@@ -34,10 +34,10 @@ class PageParams:
 class Page[T](BaseModel):
     """统一分页响应结构。"""
 
-    items: list[T]
-    total: int
-    page: int
-    page_size: int
+    items: list[T] = Field(description="当前页记录")
+    total: int = Field(description="符合条件的总条数")
+    page: int = Field(description="当前页码，从 1 开始")
+    page_size: int = Field(description="每页条数")
 
     @classmethod
     def build(cls, items: list[T], total: int, params: PageParams) -> "Page[T]":

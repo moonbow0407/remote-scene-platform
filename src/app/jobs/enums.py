@@ -13,6 +13,8 @@ from enum import StrEnum
 
 
 class JobType(StrEnum):
+    """任务类型：栅格入库、矢量入库、附件入库、监测执行。"""
+
     RASTER_INGESTION = "RASTER_INGESTION"
     VECTOR_INGESTION = "VECTOR_INGESTION"
     ATTACHMENT_INGESTION = "ATTACHMENT_INGESTION"
@@ -31,6 +33,13 @@ TASK_BY_JOB_TYPE: dict[JobType, str] = {
 
 
 class JobStatus(StrEnum):
+    """任务状态。
+
+    PENDING 待投递、QUEUED 已入队、RUNNING 执行中、RETRYING 退避重试、
+    NEEDS_INPUT 待补输入、SUCCEEDED 成功、FAILED 失败、
+    CANCEL_REQUESTED 取消中、CANCELLED 已取消、MISSED 错过周期。
+    """
+
     PENDING = "PENDING"
     QUEUED = "QUEUED"
     RUNNING = "RUNNING"

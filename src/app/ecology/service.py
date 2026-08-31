@@ -304,8 +304,7 @@ class EcologyService:
                 EcologicalParameterResourceMapping.id != mapping_id,
                 EcologicalParameterResourceMapping.ecological_parameter_id
                 == body.ecological_parameter_id,
-                EcologicalParameterResourceMapping.resource_catalog_id
-                == body.resource_catalog_id,
+                EcologicalParameterResourceMapping.resource_catalog_id == body.resource_catalog_id,
             )
         )
         if duplicate is not None:

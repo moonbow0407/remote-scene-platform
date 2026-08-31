@@ -5,7 +5,7 @@ from collections.abc import Iterator
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, Path, Request, Response
 from sqlalchemy.orm import Session
 
 from app.assets.enums import ArtifactKind, AssetVersionStatus
@@ -13,6 +13,7 @@ from app.assets.service import AssetService
 from app.db import session_scope
 from app.errors import ProblemError, not_found
 from app.settings import Settings
+from app.tiles.schemas import TileUrlResponse
 from app.tiles.service import (
     build_tile_url_template,
     extract_resource_from_uri,
@@ -31,13 +32,21 @@ def _get_session(request: Request) -> Iterator[Session]:
         yield session
 
 
-@router.get("/assets/{asset_id}/versions/{version_id}/tile-url")
+@router.get(
+    "/assets/{asset_id}/versions/{version_id}/tile-url",
+    summary="签发瓦片地址",
+    description=(
+        "仅为 READY 的栅格版本签发短期瓦片 URL 模板。"
+        "必须经本平台网关访问，不要直连 TiTiler。令牌过期后重新申请。"
+    ),
+    response_model=TileUrlResponse,
+)
 def issue_tile_url(
-    asset_id: UUID,
-    version_id: UUID,
+    asset_id: Annotated[UUID, Path(description="逻辑资产 ID")],
+    version_id: Annotated[UUID, Path(description="资产版本 ID")],
     request: Request,
     session: Annotated[Session, Depends(_get_session)],
-) -> dict[str, object]:
+) -> TileUrlResponse:
     """为 READY 的栅格版本签发短期瓦片 URL 模板与令牌。"""
     settings: Settings = request.app.state.settings
     service = AssetService(session)
@@ -81,12 +90,13 @@ def issue_tile_url(
         token=token,
         band_indexes=raw_bands,
     )
-    return {
-        "asset_version_id": str(version.id),
-        **urls,
-        "token_expires_at": expires_at,
-        "ttl_seconds": settings.tile_token_ttl_seconds,
-    }
+    return TileUrlResponse(
+        asset_version_id=version.id,
+        tile_url_template=str(urls["tile_url_template"]),
+        tile_json_url=str(urls["tile_json_url"]),
+        token_expires_at=expires_at,
+        ttl_seconds=settings.tile_token_ttl_seconds,
+    )
 
 
 @router.get("/tiles/verify", include_in_schema=False)

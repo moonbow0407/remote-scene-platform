@@ -30,6 +30,4 @@ class VectorFeature(Base):
         sa.DateTime(timezone=True), default=now_utc, nullable=False
     )
 
-    __table_args__ = (
-        sa.Index("ix_vector_feature_geom", "geometry", postgresql_using="gist"),
-    )
+    __table_args__ = (sa.Index("ix_vector_feature_geom", "geometry", postgresql_using="gist"),)

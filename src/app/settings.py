@@ -14,6 +14,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     """运行配置。字段名即环境变量名（去掉 APP_ 前缀、不区分大小写）。"""
 
+    # 只读一份 `.env`（本机联调是 127.0.0.1 映射口）。Compose 全栈在 compose.yaml 里覆盖为容器 DNS。
     model_config = SettingsConfigDict(env_prefix="APP_", env_file=".env", extra="ignore")
 
     env: str = "local"

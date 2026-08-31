@@ -3,7 +3,7 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Path, Request
 from sqlalchemy.orm import Session
 
 from app.auth.dependencies import (
@@ -44,7 +44,12 @@ def _token_response(issued: IssuedTokens) -> TokenResponse:
     )
 
 
-@auth_router.post("/login", response_model=TokenResponse)
+@auth_router.post(
+    "/login",
+    summary="登录",
+    description="用用户名或邮箱登录，返回访问令牌与刷新令牌。",
+    response_model=TokenResponse,
+)
 def login(
     body: LoginRequest,
     request: Request,
@@ -56,7 +61,12 @@ def login(
     return _token_response(issued)
 
 
-@auth_router.post("/refresh", response_model=TokenResponse)
+@auth_router.post(
+    "/refresh",
+    summary="刷新令牌",
+    description="用刷新令牌换取新的访问令牌与刷新令牌。",
+    response_model=TokenResponse,
+)
 def refresh(
     body: RefreshRequest,
     request: Request,
@@ -66,12 +76,22 @@ def refresh(
     return _token_response(issued)
 
 
-@auth_router.get("/me", response_model=UserPublic)
+@auth_router.get(
+    "/me",
+    summary="当前用户",
+    description="返回持有访问令牌的用户资料，不含密码。",
+    response_model=UserPublic,
+)
 def me(user: Annotated[User, Depends(get_current_user)]) -> UserPublic:
     return UserPublic.model_validate(user)
 
 
-@users_router.get("", response_model=Page[UserPublic])
+@users_router.get(
+    "",
+    summary="用户列表",
+    description="分页列出用户。需要管理员。",
+    response_model=Page[UserPublic],
+)
 def list_users(
     params: Annotated[PageParams, Depends()],
     _admin: Annotated[ActorContext, Depends(require_admin)],
@@ -85,7 +105,13 @@ def list_users(
     )
 
 
-@users_router.post("", status_code=201, response_model=UserPublic)
+@users_router.post(
+    "",
+    status_code=201,
+    summary="创建用户",
+    description="管理员创建账号。首版不提供自助注册。",
+    response_model=UserPublic,
+)
 def create_user(
     body: UserCreateRequest,
     _admin: Annotated[ActorContext, Depends(require_admin)],
@@ -100,9 +126,14 @@ def create_user(
     return UserPublic.model_validate(user)
 
 
-@users_router.get("/{user_id}", response_model=UserPublic)
+@users_router.get(
+    "/{user_id}",
+    summary="用户详情",
+    description="本人或管理员可查看。",
+    response_model=UserPublic,
+)
 def get_user(
-    user_id: UUID,
+    user_id: Annotated[UUID, Path(description="用户 ID")],
     actor: Annotated[ActorContext, Depends(get_current_actor)],
     service: Annotated[AuthService, Depends(_service)],
 ) -> UserPublic:
@@ -110,9 +141,14 @@ def get_user(
     return UserPublic.model_validate(service.get_user_required(user_id))
 
 
-@users_router.put("/{user_id}", response_model=UserPublic)
+@users_router.put(
+    "/{user_id}",
+    summary="更新用户",
+    description="管理员修改用户名、邮箱、密码或角色。未出现的字段保持不变。",
+    response_model=UserPublic,
+)
 def update_user(
-    user_id: UUID,
+    user_id: Annotated[UUID, Path(description="用户 ID")],
     body: UserUpdateRequest,
     _admin: Annotated[ActorContext, Depends(require_admin)],
     service: Annotated[AuthService, Depends(_service)],
@@ -127,9 +163,14 @@ def update_user(
     return UserPublic.model_validate(user)
 
 
-@users_router.patch("/{user_id}/status", response_model=UserPublic)
+@users_router.patch(
+    "/{user_id}/status",
+    summary="启用或停用用户",
+    description="管理员启停账号。停用后该用户无法登录。",
+    response_model=UserPublic,
+)
 def set_user_status(
-    user_id: UUID,
+    user_id: Annotated[UUID, Path(description="用户 ID")],
     body: UserStatusRequest,
     admin: Annotated[ActorContext, Depends(require_admin)],
     service: Annotated[AuthService, Depends(_service)],

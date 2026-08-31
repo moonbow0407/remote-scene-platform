@@ -96,41 +96,27 @@ uv run ruff check .             # 静态检查
 uv run pyright                  # 类型检查
 ```
 
-日常联调（WSL Docker Engine + 本机 `uv run`）：不要用 Windows 上的 PostgreSQL 15 / Redis / MySQL。
-基础设施用 Compose，应用进程留在 WSL。PostGIS 映射 `127.0.0.1:55432`，避开 Windows `5432`。
+日常联调（WSL Docker Engine + 本机进程）：不要用 Windows 上的 PostgreSQL 15 / Redis / MySQL。
+基础设施用 Compose，API / Dispatcher / Worker 留在 WSL。只需一份 `.env`（`127.0.0.1` 映射口）；
+容器内主机名由 `compose.yaml` 覆盖，不必再维护第二份环境文件。
 
 ```bash
-# 1. 只起基础设施（不要 --build 应用镜像）
-docker compose up -d db minio minio-init rabbitmq titiler
-docker compose ps
-
-# 2. 原生进程读 .env.native（容器内进程仍读 .env）
-cp .env.native.example .env.native   # 首次
-set -a && source .env.native && set +a
-mkdir -p /tmp/remote-scene-worker
-uv run alembic upgrade head
-
-# 3. 分终端启动（需要热重载与看日志时）
-uv run uvicorn app.api.app:create_app --factory --host 127.0.0.1 --port 8000 --reload
-uv run python -m app.dispatcher.main
-uv run celery -A app.worker.celery_app:celery worker -Q geo --concurrency 2 --loglevel INFO
-# 需要调度 / 租约回收 / 清理时再开：
-# uv run python -m app.scheduler.main
-# uv run python -m app.recovery.main
-# uv run python -m app.cleanup.main
+cp .env.example .env          # 首次
+uv sync --all-groups
+./scripts/dev.sh              # 起 db/minio/rabbitmq/titiler，并在本机跑 API+Dispatcher+Worker
+# ./scripts/dev.sh --all      # 还要 Scheduler / Recovery / Cleanup 时
 ```
 
 验证：`curl -s http://127.0.0.1:8000/api/v1/readyz`。浏览器访问 MinIO 控制台 `http://127.0.0.1:9001`。
+Ctrl-C 结束本机进程，基础设施容器保持运行。PostGIS 映射 `127.0.0.1:55432`，避开 Windows `5432`。
 瓦片网关（Nginx `:8080` fail-closed）需要全栈 Compose，日常改 API 不必起 nginx。
 
-干净环境验收仍走全栈：
+干净环境验收仍走全栈（会构建应用镜像）：
 
 ```bash
 docker compose up -d --build
 curl -s http://127.0.0.1:8080/api/v1/readyz
 ```
-
-此时用 `.env`（容器 DNS：`db` / `minio` / `rabbitmq` / `titiler`），不要 source `.env.native`。
 
 依赖组边界：API 镜像只装基础依赖 + `api` 组（无 GDAL/科学栈）；Geo Worker 镜像装 `worker`
 组（Celery + rasterio/shapely/pyproj/numpy，GDAL 由基础镜像提供）。

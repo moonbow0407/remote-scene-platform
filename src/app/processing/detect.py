@@ -63,9 +63,7 @@ def _require_shapefile_zip(path: Path) -> None:
     try:
         with zipfile.ZipFile(path) as archive:
             names = [
-                _safe_zip_name(info.filename)
-                for info in archive.infolist()
-                if not info.is_dir()
+                _safe_zip_name(info.filename) for info in archive.infolist() if not info.is_dir()
             ]
     except zipfile.BadZipFile as exc:
         raise DeterministicError(

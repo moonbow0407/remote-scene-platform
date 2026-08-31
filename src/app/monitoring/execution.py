@@ -58,9 +58,7 @@ class SnapshotBrokenError(DeterministicError):
         self.problems = list(problems)
 
 
-def execute_monitoring_run(
-    job_id: str, *, factory: sessionmaker[Session] | None = None
-) -> None:
+def execute_monitoring_run(job_id: str, *, factory: sessionmaker[Session] | None = None) -> None:
     """监测执行任务入口：认领 → 快照审计 → 终态推进。
 
     factory 参数供测试注入 SQLite 会话工厂；生产路径使用进程级引擎缓存。
@@ -134,9 +132,7 @@ def execute_monitoring_run(
             event = jobs.schedule_retry(job, detail=detail)
             if event is None:
                 # 重试耗尽：schedule_retry 已把 Job 置 FAILED，这里同步 Run 终态
-                _finalize_run_failure(
-                    session, run_id, detail=f"瞬时错误重试次数耗尽：{exc}"
-                )
+                _finalize_run_failure(session, run_id, detail=f"瞬时错误重试次数耗尽：{exc}")
         if event is None:
             logger.error("监测执行瞬时错误重试耗尽，任务失败", extra={"job_id": job_id})
         else:

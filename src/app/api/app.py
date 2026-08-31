@@ -91,9 +91,32 @@ def create_app() -> FastAPI:
     configure_logging(settings.log_level)
 
     app = FastAPI(
-        title="remote-scene-platform",
+        title="多源遥感数据共享平台",
         version="0.1.0",
+        description=(
+            "业务前缀一律 `/api/v1`。成功响应直接返回资源，没有 `{code,msg,data}` 信封；"
+            "分页固定为 `items` / `total` / `page` / `page_size`；"
+            "错误为 RFC 9457 `application/problem+json`。"
+            "空间输入只接受 EPSG:4326 的 GeoJSON Polygon 或 MultiPolygon。"
+            "大文件经预签名直传 MinIO，字节不经过本 API。"
+        ),
         lifespan=_lifespan,
+        servers=[
+            {"url": settings.public_base_url.rstrip("/"), "description": "当前环境 API 基地址"},
+        ],
+        openapi_tags=[
+            {"name": "运维", "description": "存活、就绪、指标"},
+            {"name": "鉴权", "description": "登录、刷新令牌、当前用户"},
+            {"name": "用户", "description": "管理员建号、改资料、启停账号"},
+            {"name": "上传", "description": "MinIO 分片上传会话；文件不经 API"},
+            {"name": "资产", "description": "逻辑资产、不可变版本、检索、元数据补全、删除恢复"},
+            {"name": "任务", "description": "入库/监测任务进度与取消"},
+            {"name": "瓦片", "description": "短期瓦片令牌，经网关 /tiles/ 访问"},
+            {"name": "矢量要素", "description": "PostGIS 要素空间检索"},
+            {"name": "目录", "description": "资源目录、卫星、传感器"},
+            {"name": "生态", "description": "生态参数及其与资源目录的映射"},
+            {"name": "监测", "description": "监测计划、调度执行与不可变输入快照"},
+        ],
         openapi_url=f"{API_V1_PREFIX}/openapi.json",
         docs_url=f"{API_V1_PREFIX}/docs",
         redoc_url=None,
@@ -115,25 +138,40 @@ def create_app() -> FastAPI:
         """让 OpenAPI 与实际 RFC 9457 错误媒体类型一致，避免前端按框架默认误接。"""
         if app.openapi_schema is not None:
             return app.openapi_schema
-        schema = get_openapi(title=app.title, version=app.version, routes=app.routes)
+        schema = get_openapi(
+            title=app.title,
+            version=app.version,
+            description=app.description,
+            routes=app.routes,
+            tags=app.openapi_tags,
+            servers=[
+                {
+                    "url": settings.public_base_url.rstrip("/"),
+                    "description": "当前环境 API 基地址",
+                }
+            ],
+        )
         components = schema.setdefault("components", {}).setdefault("schemas", {})
         components["ProblemDetails"] = {
             "type": "object",
+            "description": "RFC 9457 错误体。业务失败不会包装成 HTTP 200。",
             "required": ["type", "title", "status", "code"],
             "properties": {
-                "type": {"type": "string"},
-                "title": {"type": "string"},
-                "status": {"type": "integer"},
-                "code": {"type": "string"},
-                "detail": {"type": "string"},
-                "trace_id": {"type": "string"},
-                "errors": {"type": "array", "items": {"type": "object"}},
+                "type": {"type": "string", "description": "问题类型 URI，本平台固定 about:blank"},
+                "title": {"type": "string", "description": "人可读的错误标题"},
+                "status": {"type": "integer", "description": "HTTP 状态码"},
+                "code": {"type": "string", "description": "稳定业务错误码，客户端按此分支处理"},
+                "detail": {"type": "string", "description": "详细说明"},
+                "trace_id": {"type": "string", "description": "请求追踪 ID，排查问题时提供给后端"},
+                "errors": {
+                    "type": "array",
+                    "items": {"type": "object"},
+                    "description": "字段级校验错误列表，多见于 422",
+                },
             },
         }
         problem_content = {
-            "application/problem+json": {
-                "schema": {"$ref": "#/components/schemas/ProblemDetails"}
-            }
+            "application/problem+json": {"schema": {"$ref": "#/components/schemas/ProblemDetails"}}
         }
         for path_item in schema.get("paths", {}).values():
             for method, operation in path_item.items():

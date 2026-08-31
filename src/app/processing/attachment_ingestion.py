@@ -38,9 +38,7 @@ class AttachmentIngestion:
             cancellation_checkpoint(ctx, self._engine)
             detected, mime = self._step_validate(ctx)
             cancellation_checkpoint(ctx, self._engine)
-            hash_dedup_original(
-                minio=self._minio, engine=self._engine, ctx=ctx, content_type=mime
-            )
+            hash_dedup_original(minio=self._minio, engine=self._engine, ctx=ctx, content_type=mime)
             cancellation_checkpoint(ctx, self._engine)
             self._step_register(ctx, detected, mime)
             cancellation_checkpoint(ctx, self._engine)

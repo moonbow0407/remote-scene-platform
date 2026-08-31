@@ -11,7 +11,7 @@ from enum import StrEnum
 
 
 class ActorRole(StrEnum):
-    """首版角色：仅管理员与普通用户，不引入权限字符串或策略引擎。"""
+    """角色：ADMIN 管理员、USER 普通用户。首版不引入动态权限字符串。"""
 
     ADMIN = "ADMIN"
     USER = "USER"

@@ -8,18 +8,28 @@ from enum import StrEnum
 
 
 class AssetType(StrEnum):
+    """物理类型：RASTER 栅格、VECTOR 矢量、ATTACHMENT 附件。"""
+
     RASTER = "RASTER"
     VECTOR = "VECTOR"
     ATTACHMENT = "ATTACHMENT"
 
 
 class AssetSource(StrEnum):
+    """来源：UPLOAD 本机上传、SATELLITE 卫星采集、EXTERNAL_IMPORT 外部导入。"""
+
     UPLOAD = "UPLOAD"
     SATELLITE = "SATELLITE"
     EXTERNAL_IMPORT = "EXTERNAL_IMPORT"
 
 
 class AssetVersionStatus(StrEnum):
+    """资产版本状态。
+
+    UPLOADING 上传中、VALIDATING 校验中、PROCESSING 处理中、
+    NEEDS_INPUT 待补元数据、READY 可用、FAILED 失败、DELETED 已删除。
+    """
+
     UPLOADING = "UPLOADING"
     VALIDATING = "VALIDATING"
     PROCESSING = "PROCESSING"
@@ -30,6 +40,8 @@ class AssetVersionStatus(StrEnum):
 
 
 class ArtifactKind(StrEnum):
+    """工件种类：ORIGINAL 原始文件、COG 云优化 GeoTIFF、THUMBNAIL 缩略图。"""
+
     ORIGINAL = "ORIGINAL"
     COG = "COG"
     THUMBNAIL = "THUMBNAIL"

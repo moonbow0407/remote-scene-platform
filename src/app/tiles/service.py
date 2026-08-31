@@ -99,8 +99,7 @@ def build_tile_url_template(
     )
     return {
         "tile_url_template": (
-            f"{base_url}/tiles/cog/tiles/WebMercatorQuad/"
-            f"{{z}}/{{x}}/{{y}}.png?{query}"
+            f"{base_url}/tiles/cog/tiles/WebMercatorQuad/{{z}}/{{x}}/{{y}}.png?{query}"
         ),
         "tile_json_url": f"{base_url}/tiles/cog/WebMercatorQuad/tilejson.json?{query}",
     }

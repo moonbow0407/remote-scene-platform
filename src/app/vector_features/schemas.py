@@ -3,19 +3,26 @@
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 from app.pagination import MAX_PAGE_SIZE
 
 
 class FeatureSearchRequest(BaseModel):
-    geometry: dict[str, Any] = Field(description="EPSG:4326 GeoJSON Polygon/MultiPolygon")
-    page: int = Field(default=1, ge=1)
-    page_size: int = Field(default=20, ge=1, le=MAX_PAGE_SIZE)
+    model_config = ConfigDict(populate_by_name=True)
+
+    spatial_geojson: dict[str, Any] = Field(
+        validation_alias=AliasChoices("spatial_geojson", "geometry"),
+        description="检索范围，EPSG:4326 GeoJSON Polygon 或 MultiPolygon",
+    )
+    page: int = Field(default=1, ge=1, description="页码，从 1 开始")
+    page_size: int = Field(
+        default=20, ge=1, le=MAX_PAGE_SIZE, description=f"每页条数，上限 {MAX_PAGE_SIZE}"
+    )
 
 
 class FeatureItem(BaseModel):
-    id: UUID
-    asset_version_id: UUID
-    geometry: dict[str, Any]
-    properties: dict[str, Any]
+    id: UUID = Field(description="要素 ID")
+    asset_version_id: UUID = Field(description="所属资产版本 ID")
+    spatial_geojson: dict[str, Any] = Field(description="要素几何，EPSG:4326 GeoJSON")
+    properties: dict[str, Any] = Field(description="动态属性（JSONB）")

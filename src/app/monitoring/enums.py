@@ -12,21 +12,21 @@ from enum import StrEnum
 
 
 class PlanStatus(StrEnum):
-    """计划状态：ACTIVE 参与调度，PAUSED 暂停但不删除配置。"""
+    """计划状态：ACTIVE 参与调度、PAUSED 暂停但不删除配置。"""
 
     ACTIVE = "ACTIVE"
     PAUSED = "PAUSED"
 
 
 class ScheduleType(StrEnum):
-    """调度类型：固定间隔（ISO 8601 duration 子集）或 RFC 5545 RRULE。"""
+    """调度类型：INTERVAL 固定间隔（如 PT6H/P1D）、RRULE 按 RFC 5545 重复规则。"""
 
     INTERVAL = "INTERVAL"
     RRULE = "RRULE"
 
 
 class OccurrenceTrigger(StrEnum):
-    """occurrence 来源：调度器到期触发或人工手动触发。"""
+    """触发来源：SCHEDULED 调度器到期、MANUAL 人工手动触发。"""
 
     SCHEDULED = "SCHEDULED"
     MANUAL = "MANUAL"
@@ -44,7 +44,7 @@ class OccurrenceStatus(StrEnum):
 
 
 class RunStatus(StrEnum):
-    """监测执行状态。终态为 SUCCEEDED/FAILED；输入快照与状态无关地保持不可变。"""
+    """监测执行状态：PENDING 待执行、RUNNING 执行中、SUCCEEDED 成功、FAILED 失败。"""
 
     PENDING = "PENDING"
     RUNNING = "RUNNING"

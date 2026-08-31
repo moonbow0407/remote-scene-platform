@@ -9,6 +9,7 @@ from collections.abc import Callable
 from fastapi import APIRouter, Request, Response
 from fastapi.responses import JSONResponse
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+from pydantic import BaseModel, Field
 
 from app.api.operational_metrics import refresh_database_metrics, refresh_rabbitmq_metrics
 from app.checks import check_database, check_minio, check_rabbitmq, check_titiler
@@ -19,7 +20,22 @@ from app.settings import get_settings
 router = APIRouter(tags=["运维"])
 
 
-@router.get("/metrics")
+class HealthzResponse(BaseModel):
+    status: str = Field(description="进程存活状态，正常时为 ok")
+
+
+class ReadyzResponse(BaseModel):
+    status: str = Field(description="总体就绪状态，全部依赖可用时为 ok")
+    components: dict[str, str] = Field(
+        description="各依赖组件状态。键为 db / minio / rabbitmq / titiler，值为 ok 或 unavailable"
+    )
+
+
+@router.get(
+    "/metrics",
+    summary="Prometheus 指标",
+    description="供内网 Prometheus 抓取；Nginx 对外返回 404，不要当业务接口调用。",
+)
 async def metrics(request: Request) -> Response:
     """Prometheus 抓取端点；由内网 Prometheus 直接抓取，不经 Nginx 对外暴露。"""
     refresh_database_metrics(request.app.state.session_factory)
@@ -27,12 +43,25 @@ async def metrics(request: Request) -> Response:
     return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
-@router.get("/healthz")
+@router.get(
+    "/healthz",
+    summary="存活探针",
+    description="只表示 API 进程还活着，不检查数据库等依赖。联调请再调就绪探针。",
+    response_model=HealthzResponse,
+)
 async def healthz() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@router.get("/readyz")
+@router.get(
+    "/readyz",
+    summary="就绪探针",
+    description=(
+        "检查 PostgreSQL、MinIO、RabbitMQ、TiTiler。"
+        "任一不可达返回 503，并在 components 里标明失败组件。"
+    ),
+    response_model=ReadyzResponse,
+)
 async def readyz(request: Request) -> JSONResponse:
     settings = get_settings()
     engine = request.app.state.engine

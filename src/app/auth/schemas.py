@@ -38,37 +38,39 @@ class LoginRequest(BaseModel):
     """登录标识可以是 username 或 email。"""
 
     username: str = Field(min_length=1, max_length=255, description="用户名或邮箱")
-    password: str = Field(min_length=1, max_length=128)
+    password: str = Field(min_length=1, max_length=128, description="登录密码")
 
 
 class RefreshRequest(BaseModel):
-    refresh_token: str = Field(min_length=1, description="Refresh Token")
+    refresh_token: str = Field(min_length=1, description="刷新令牌，由登录接口返回")
 
 
 class TokenResponse(BaseModel):
-    access_token: str
-    refresh_token: str
-    token_type: str = "Bearer"
-    expires_in: int
+    access_token: str = Field(description="访问令牌，请求受保护接口时放在 Authorization: Bearer")
+    refresh_token: str = Field(description="刷新令牌，用于换取新的访问令牌")
+    token_type: str = Field(default="Bearer", description="令牌类型，固定 Bearer")
+    expires_in: int = Field(description="访问令牌有效期，单位秒")
 
 
 class UserPublic(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
-    id: UUID
-    username: str
-    email: str
-    role: ActorRole
-    is_active: bool
-    created_at: datetime
-    updated_at: datetime
+    id: UUID = Field(description="用户 ID")
+    username: str = Field(description="登录用户名")
+    email: str = Field(description="邮箱")
+    role: ActorRole = Field(description="角色：ADMIN 管理员、USER 普通用户")
+    is_active: bool = Field(description="是否启用；false 后无法登录")
+    created_at: datetime = Field(description="创建时间（UTC，带时区）")
+    updated_at: datetime = Field(description="最近更新时间（UTC，带时区）")
 
 
 class UserCreateRequest(BaseModel):
-    username: str = Field(min_length=3, max_length=64)
-    email: str = Field(min_length=3, max_length=255)
-    password: str = Field(min_length=8, max_length=128)
-    role: ActorRole = ActorRole.USER
+    username: str = Field(
+        min_length=3, max_length=64, description="登录用户名，3–64 字符，字母或数字开头"
+    )
+    email: str = Field(min_length=3, max_length=255, description="邮箱，全局唯一")
+    password: str = Field(min_length=8, max_length=128, description="初始密码，8–128 字符")
+    role: ActorRole = Field(default=ActorRole.USER, description="角色：ADMIN 管理员、USER 普通用户")
 
     @field_validator("username")
     @classmethod
@@ -87,10 +89,16 @@ class UserCreateRequest(BaseModel):
 
 
 class UserUpdateRequest(BaseModel):
-    username: str | None = Field(default=None, min_length=3, max_length=64)
-    email: str | None = Field(default=None, min_length=3, max_length=255)
-    password: str | None = Field(default=None, min_length=8, max_length=128)
-    role: ActorRole | None = None
+    username: str | None = Field(
+        default=None, min_length=3, max_length=64, description="新用户名；省略表示不改"
+    )
+    email: str | None = Field(
+        default=None, min_length=3, max_length=255, description="新邮箱；省略表示不改"
+    )
+    password: str | None = Field(
+        default=None, min_length=8, max_length=128, description="新密码；省略表示不改"
+    )
+    role: ActorRole | None = Field(default=None, description="新角色；省略表示不改")
 
     @field_validator("username")
     @classmethod
@@ -120,4 +128,4 @@ class UserUpdateRequest(BaseModel):
 
 
 class UserStatusRequest(BaseModel):
-    is_active: bool
+    is_active: bool = Field(description="是否启用；false 立即禁止该用户登录")

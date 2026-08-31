@@ -14,6 +14,8 @@ from app.db import Base, TimestampMixin
 
 
 class UploadSessionStatus(StrEnum):
+    """上传会话状态：PENDING 等待分片、COMPLETED 已完成、ABORTED 已中止。"""
+
     PENDING = "PENDING"
     COMPLETED = "COMPLETED"
     ABORTED = "ABORTED"

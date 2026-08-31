@@ -1,6 +1,18 @@
 name: remote-scene-platform
 
 # 首版本机开发栈。所有服务不暴露公网；Nginx 是唯一对外入口（8080）。
+#
+# `.env` 给本机 `uv run` / scripts/dev.sh 用（127.0.0.1 映射端口）。
+# 下面锚点覆盖容器内主机名；全栈 `docker compose up` 不依赖第二份环境文件。
+x-app-env: &app-env
+  APP_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD:-app}@db:5432/${POSTGRES_DB:-remote_scene}
+  APP_MINIO_ENDPOINT: minio:9000
+  APP_RABBITMQ_URL: amqp://${RABBITMQ_USER:-app}:${RABBITMQ_PASSWORD:-app}@rabbitmq:5672/
+  APP_RABBITMQ_MANAGEMENT_URL: http://rabbitmq:15672
+  APP_TITILER_URL: http://titiler:80
+  APP_PUBLIC_BASE_URL: http://localhost:8080
+  APP_WORKER_TMP_DIR: /data/tmp
+
 services:
   db:
     image: postgis/postgis:16-3.4
@@ -97,6 +109,8 @@ services:
         UV_DEFAULT_INDEX: https://pypi.tuna.tsinghua.edu.cn/simple
     image: remote-scene/api:latest
     env_file: .env
+    environment:
+      <<: *app-env
     command:
       - sh
       - -c
@@ -124,6 +138,8 @@ services:
         UV_DEFAULT_INDEX: https://pypi.tuna.tsinghua.edu.cn/simple
     image: remote-scene/worker:latest
     env_file: .env
+    environment:
+      <<: *app-env
     command:
       - .venv/bin/celery
       - -A
@@ -146,6 +162,8 @@ services:
   dispatcher:
     image: remote-scene/api:latest
     env_file: .env
+    environment:
+      <<: *app-env
     command: [".venv/bin/python", "-m", "app.dispatcher.main"]
     depends_on:
       db:
@@ -154,6 +172,8 @@ services:
   scheduler:
     image: remote-scene/api:latest
     env_file: .env
+    environment:
+      <<: *app-env
     command: [".venv/bin/python", "-m", "app.scheduler.main"]
     depends_on:
       db:
@@ -163,6 +183,8 @@ services:
   recovery:
     image: remote-scene/api:latest
     env_file: .env
+    environment:
+      <<: *app-env
     command: [".venv/bin/python", "-m", "app.recovery.main"]
     depends_on:
       db:
@@ -172,6 +194,8 @@ services:
   cleanup:
     image: remote-scene/api:latest
     env_file: .env
+    environment:
+      <<: *app-env
     command: [".venv/bin/python", "-m", "app.cleanup.main"]
     depends_on:
       db:

@@ -35,7 +35,14 @@ def _sanitize_file_name(raw: str) -> str:
     return name[:512]
 
 
-def _parse_acquired_at(properties: dict[str, Any]) -> datetime | None:
+def _parse_acquired_at(
+    properties: dict[str, Any], explicit: datetime | None = None
+) -> datetime | None:
+    """一等字段优先；仍接受 properties.acquired_at 以兼容旧客户端。"""
+    if explicit is not None:
+        if explicit.tzinfo is None or explicit.utcoffset() is None:
+            raise validation_error("acquired_at 必须携带时区，例如 +08:00 或 Z")
+        return explicit.astimezone(UTC)
     raw = properties.get("acquired_at")
     if raw is None:
         return None
@@ -94,6 +101,7 @@ class UploadService:
         resource_catalog_id: UUID | None = None,
         satellite_id: UUID | None = None,
         sensor_id: UUID | None = None,
+        acquired_at: datetime | None = None,
     ) -> tuple[UploadSession, list[dict[str, Any]]]:
         """创建逻辑资产（或追加到已有资产）+ 上传会话，并生成全部分片预签名 URL。"""
         if asset_type not in (AssetType.RASTER, AssetType.VECTOR, AssetType.ATTACHMENT):
@@ -101,6 +109,10 @@ class UploadService:
         session_id = new_uuid7()
         safe_name = _sanitize_file_name(file_name)
         object_key = f"uploads/{session_id}/{safe_name}"
+        properties = dict(properties)
+        resolved_acquired = _parse_acquired_at(properties, acquired_at)
+        if resolved_acquired is not None:
+            properties.setdefault("acquired_at", resolved_acquired.isoformat())
 
         # 先完成全部依赖数据库/MinIO 之外状态的校验，再创建 Multipart：
         # 否则无效请求（如资源目录不存在）会留下无人 abort 的孤儿分片上传。

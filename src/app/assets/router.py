@@ -7,7 +7,7 @@ from typing import Annotated, Any
 from uuid import UUID
 
 import sqlalchemy as sa
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Path, Request
 from sqlalchemy.orm import Session
 
 from app.assets.enums import ArtifactKind, AssetVersionStatus
@@ -15,6 +15,7 @@ from app.assets.geometry import GeometryValidationError, geojson_to_wkt
 from app.assets.lifecycle import AssetLifecycleService
 from app.assets.models import AssetVersion
 from app.assets.schemas import (
+    ArtifactDownloadUrlResponse,
     ArtifactResponse,
     AssetDetailResponse,
     AssetUpdateRequest,
@@ -26,11 +27,13 @@ from app.assets.schemas import (
     SearchItem,
     SearchRequest,
     SubmitInputRequest,
+    SubmitInputResponse,
     VectorExtResponse,
     VersionDetailResponse,
     VersionSummary,
 )
 from app.assets.service import AssetService
+from app.catalogs.service import CatalogService
 from app.context import get_actor
 from app.db import session_scope
 from app.errors import not_found, validation_error
@@ -49,6 +52,35 @@ def _get_session(request: Request) -> Iterator[Session]:
 
 def _service(session: Annotated[Session, Depends(_get_session)]) -> AssetService:
     return AssetService(session)
+
+
+def _catalogs(session: Annotated[Session, Depends(_get_session)]) -> CatalogService:
+    return CatalogService(session)
+
+
+def _epsg_code(crs: str | None) -> int | None:
+    if crs is None:
+        return None
+    text = crs.strip()
+    if _EPSG_PATTERN.fullmatch(text) is None:
+        return None
+    return int(text.split(":", 1)[1])
+
+
+def _classification(catalogs: CatalogService, asset: Any) -> dict[str, str | None]:
+    catalog = (
+        catalogs.get_resource(asset.resource_catalog_id) if asset.resource_catalog_id else None
+    )
+    satellite = catalogs.get_satellite(asset.satellite_id) if asset.satellite_id else None
+    sensor = catalogs.get_sensor(asset.sensor_id) if asset.sensor_id else None
+    return {
+        "resource_catalog_code": None if catalog is None else catalog.code,
+        "resource_catalog_name": None if catalog is None else catalog.name,
+        "satellite_code": None if satellite is None else satellite.code,
+        "satellite_name": None if satellite is None else satellite.name,
+        "sensor_code": None if sensor is None else sensor.code,
+        "sensor_name": None if sensor is None else sensor.name,
+    }
 
 
 def _version_summary(version: AssetVersion) -> VersionSummary:
@@ -76,7 +108,12 @@ def _footprint_geojson(service: AssetService, geom: Any) -> dict[str, Any] | Non
     return json.loads(row) if row else None
 
 
-@router.get("/property-schemas", response_model=list[PropertySchemaItem])
+@router.get(
+    "/property-schemas",
+    summary="列出属性模式",
+    description="已登记的 JSON Schema，用于校验资产 properties。",
+    response_model=list[PropertySchemaItem],
+)
 def list_property_schemas(
     service: Annotated[AssetService, Depends(_service)],
 ) -> list[PropertySchemaItem]:
@@ -86,9 +123,14 @@ def list_property_schemas(
     ]
 
 
-@router.put("/property-schemas/{name}", response_model=PropertySchemaItem)
+@router.put(
+    "/property-schemas/{name}",
+    summary="登记属性模式",
+    description="按名称创建或覆盖 JSON Schema。写入资产 properties 前按此校验。",
+    response_model=PropertySchemaItem,
+)
 def upsert_property_schema(
-    name: str,
+    name: Annotated[str, Path(description="属性模式名称")],
     body: PropertySchemaUpsert,
     service: Annotated[AssetService, Depends(_service)],
 ) -> PropertySchemaItem:
@@ -98,7 +140,9 @@ def upsert_property_schema(
     return PropertySchemaItem(name=row.name, asset_type=row.asset_type, json_schema=row.schema)
 
 
-def _asset_detail(service: AssetService, asset: Any) -> AssetDetailResponse:
+def _asset_detail(
+    service: AssetService, catalogs: CatalogService, asset: Any
+) -> AssetDetailResponse:
     current = (
         service.get_version_by_id(asset.current_version_id)
         if asset.current_version_id is not None
@@ -115,21 +159,35 @@ def _asset_detail(service: AssetService, asset: Any) -> AssetDetailResponse:
         properties=asset.properties,
         current_version=_version_summary(current) if current is not None else None,
         created_at=asset.created_at,
+        **_classification(catalogs, asset),
     )
 
 
-@router.get("/{asset_id}", response_model=AssetDetailResponse)
+@router.get(
+    "/{asset_id}",
+    summary="资产详情",
+    description="返回逻辑资产及其当前版本摘要。软删除后普通查询不可见。",
+    response_model=AssetDetailResponse,
+)
 def get_asset(
-    asset_id: UUID, service: Annotated[AssetService, Depends(_service)]
+    asset_id: Annotated[UUID, Path(description="逻辑资产 ID")],
+    service: Annotated[AssetService, Depends(_service)],
+    catalogs: Annotated[CatalogService, Depends(_catalogs)],
 ) -> AssetDetailResponse:
-    return _asset_detail(service, service.get_asset_required(asset_id))
+    return _asset_detail(service, catalogs, service.get_asset_required(asset_id))
 
 
-@router.patch("/{asset_id}", response_model=AssetDetailResponse)
+@router.patch(
+    "/{asset_id}",
+    summary="更新资产分类",
+    description="部分更新名称与目录/卫星/传感器。未出现的字段保持不变；分类外键传 null 表示清除。",
+    response_model=AssetDetailResponse,
+)
 def update_asset(
-    asset_id: UUID,
+    asset_id: Annotated[UUID, Path(description="逻辑资产 ID")],
     body: AssetUpdateRequest,
     service: Annotated[AssetService, Depends(_service)],
+    catalogs: Annotated[CatalogService, Depends(_catalogs)],
 ) -> AssetDetailResponse:
     get_actor()
     data = body.model_dump(exclude_unset=True)
@@ -141,12 +199,17 @@ def update_asset(
         sensor_id=data.get("sensor_id"),
         set_fields=set(data),
     )
-    return _asset_detail(service, asset)
+    return _asset_detail(service, catalogs, asset)
 
 
-@router.delete("/{asset_id}", status_code=204)
+@router.delete(
+    "/{asset_id}",
+    status_code=204,
+    summary="删除资产",
+    description="软删除并进入默认 7 天恢复期。未完成的入库任务会同步请求取消。",
+)
 def delete_asset(
-    asset_id: UUID,
+    asset_id: Annotated[UUID, Path(description="逻辑资产 ID")],
     request: Request,
     session: Annotated[Session, Depends(_get_session)],
 ) -> None:
@@ -158,20 +221,30 @@ def delete_asset(
     )
 
 
-@router.post("/{asset_id}/restore", response_model=AssetDetailResponse)
+@router.post(
+    "/{asset_id}/restore",
+    summary="恢复资产",
+    description="在恢复期内恢复软删除的逻辑资产。过期返回 409 ASSET_RESTORE_WINDOW_EXPIRED。",
+    response_model=AssetDetailResponse,
+)
 def restore_asset(
-    asset_id: UUID,
+    asset_id: Annotated[UUID, Path(description="逻辑资产 ID")],
     session: Annotated[Session, Depends(_get_session)],
 ) -> AssetDetailResponse:
     """在恢复期内恢复逻辑资产；过期后返回稳定的 409 problem。"""
     lifecycle = AssetLifecycleService(session)
     asset = lifecycle.restore(asset_id)
-    return _asset_detail(AssetService(session), asset)
+    return _asset_detail(AssetService(session), CatalogService(session), asset)
 
 
-@router.get("/{asset_id}/versions", response_model=Page[VersionSummary])
+@router.get(
+    "/{asset_id}/versions",
+    summary="资产版本列表",
+    description="按版本号倒序列出该资产的全部不可变版本。",
+    response_model=Page[VersionSummary],
+)
 def list_versions(
-    asset_id: UUID,
+    asset_id: Annotated[UUID, Path(description="逻辑资产 ID")],
     service: Annotated[AssetService, Depends(_service)],
     pagination: Annotated[PageParams, Depends()],
 ) -> Page[VersionSummary]:
@@ -195,14 +268,25 @@ def list_versions(
     )
 
 
-@router.get("/{asset_id}/versions/{version_id}", response_model=VersionDetailResponse)
+@router.get(
+    "/{asset_id}/versions/{version_id}",
+    summary="版本详情",
+    description=(
+        "含栅格/矢量/附件扩展、覆盖范围、诊断信息和工件清单。NEEDS_INPUT 时看 diagnostics。"
+    ),
+    response_model=VersionDetailResponse,
+)
 def get_version(
-    asset_id: UUID, version_id: UUID, service: Annotated[AssetService, Depends(_service)]
+    asset_id: Annotated[UUID, Path(description="逻辑资产 ID")],
+    version_id: Annotated[UUID, Path(description="资产版本 ID")],
+    request: Request,
+    service: Annotated[AssetService, Depends(_service)],
 ) -> VersionDetailResponse:
     version = service.get_version_required(asset_id, version_id)
     ext = service.get_raster_ext(version_id)
     raster = None
     if ext is not None:
+        raster_spatial = _footprint_geojson(service, ext.footprint)
         raster = RasterExtResponse(
             crs=ext.crs,
             user_crs=ext.user_crs,
@@ -212,14 +296,16 @@ def get_version(
             bands=ext.bands,
             resolution_x=float(ext.resolution_x) if ext.resolution_x is not None else None,
             resolution_y=float(ext.resolution_y) if ext.resolution_y is not None else None,
-            nodata=ext.nodata,
+            nodata_value=ext.nodata,
             render_profile=ext.render_profile,
-            footprint_geojson=_footprint_geojson(service, ext.footprint),
+            epsg_code=_epsg_code(ext.crs),
+            spatial_geojson=raster_spatial,
             bbox=_bbox_of(ext),
         )
     vector_ext = service.get_vector_ext(version_id)
     vector = None
     if vector_ext is not None:
+        vector_spatial = _footprint_geojson(service, vector_ext.footprint)
         vector = VectorExtResponse(
             crs=vector_ext.crs,
             user_crs=vector_ext.user_crs,
@@ -227,7 +313,8 @@ def get_version(
             feature_count=vector_ext.feature_count,
             native_format=vector_ext.native_format,
             property_schema=vector_ext.property_schema,
-            footprint_geojson=_footprint_geojson(service, vector_ext.footprint),
+            epsg_code=_epsg_code(vector_ext.crs),
+            spatial_geojson=vector_spatial,
             bbox=_bbox_of(vector_ext),
         )
     attachment_ext = service.get_attachment_ext(version_id)
@@ -239,6 +326,7 @@ def get_version(
             original_file_name=attachment_ext.original_file_name,
         )
     artifacts = service.list_artifacts(version_id)
+    bucket = request.app.state.settings.minio_bucket
     return VersionDetailResponse(
         **_version_summary(version).model_dump(),
         properties=version.properties,
@@ -250,6 +338,7 @@ def get_version(
             ArtifactResponse(
                 id=a.id,
                 kind=a.kind.value,
+                bucket=bucket,
                 object_key=a.object_key,
                 size_bytes=a.size_bytes,
                 content_type=a.content_type,
@@ -259,14 +348,22 @@ def get_version(
     )
 
 
-@router.get("/{asset_id}/versions/{version_id}/artifacts/{kind}/download-url")
+@router.get(
+    "/{asset_id}/versions/{version_id}/artifacts/{kind}/download-url",
+    summary="工件下载地址",
+    description=(
+        "为 READY 版本签发短期签名下载 URL。"
+        "kind 为 ORIGINAL / COG / THUMBNAIL。MinIO 不直接对客户端开放。"
+    ),
+    response_model=ArtifactDownloadUrlResponse,
+)
 def artifact_download_url(
-    asset_id: UUID,
-    version_id: UUID,
-    kind: str,
+    asset_id: Annotated[UUID, Path(description="逻辑资产 ID")],
+    version_id: Annotated[UUID, Path(description="资产版本 ID")],
+    kind: Annotated[str, Path(description="工件种类：ORIGINAL 原文件、COG、THUMBNAIL")],
     request: Request,
     service: Annotated[AssetService, Depends(_service)],
-) -> dict[str, Any]:
+) -> ArtifactDownloadUrlResponse:
     """短期签名下载 URL；MinIO 不直接暴露给客户端。"""
     settings: Settings = request.app.state.settings
     asset_kind = _artifact_kind(kind)
@@ -278,21 +375,33 @@ def artifact_download_url(
     url = minio.presign_get_url(
         key=artifact.object_key, expires_in=settings.download_expiry_seconds
     )
-    return {
-        "url": url,
-        "expires_in_seconds": settings.download_expiry_seconds,
-        "kind": asset_kind.value,
-    }
+    return ArtifactDownloadUrlResponse(
+        url=url,
+        expires_in_seconds=settings.download_expiry_seconds,
+        kind=asset_kind.value,
+    )
 
 
-@router.post("/search", response_model=Page[SearchItem])
+@router.post(
+    "/search",
+    summary="检索资产",
+    description=(
+        "按空间范围、物理类型、采集时间、资源目录（含子树）、卫星、传感器、生态映射联合检索。"
+        "空间几何必须是 EPSG:4326 的 Polygon 或 MultiPolygon。"
+    ),
+    response_model=Page[SearchItem],
+)
 def search(
-    body: SearchRequest, service: Annotated[AssetService, Depends(_service)]
+    body: SearchRequest,
+    service: Annotated[AssetService, Depends(_service)],
+    catalogs: Annotated[CatalogService, Depends(_catalogs)],
 ) -> Page[SearchItem]:
-    """属性 + 空间联合检索；geometry 必须为 EPSG:4326 GeoJSON Polygon/MultiPolygon。"""
+    """属性 + 空间联合检索；spatial_geojson 必须为 EPSG:4326 GeoJSON Polygon/MultiPolygon。"""
     get_actor()
     try:
-        geometry_wkt = geojson_to_wkt(body.geometry) if body.geometry is not None else None
+        geometry_wkt = (
+            geojson_to_wkt(body.spatial_geojson) if body.spatial_geojson is not None else None
+        )
     except GeometryValidationError as exc:
         raise validation_error(str(exc)) from exc
     rows, total = service.search_versions(
@@ -311,7 +420,7 @@ def search(
     items = []
     for version, asset in rows:
         ext = None
-        if body.geometry is not None:
+        if body.spatial_geojson is not None:
             # 空间检索才读 footprint 扩展；目录过滤不依赖栅格/矢量表。
             ext = service.get_raster_ext(version.id) or service.get_vector_ext(version.id)
         items.append(
@@ -327,25 +436,35 @@ def search(
                 satellite_id=asset.satellite_id,
                 sensor_id=asset.sensor_id,
                 bbox=_bbox_of(ext),
+                **_classification(catalogs, asset),
             )
         )
     return Page[SearchItem](items=items, total=total, page=body.page, page_size=body.page_size)
 
 
-@router.post("/{asset_id}/versions/{version_id}/inputs")
+@router.post(
+    "/{asset_id}/versions/{version_id}/inputs",
+    summary="补充元数据并续跑",
+    description=(
+        "版本处于 NEEDS_INPUT（例如缺少 CRS）时，提交 EPSG 代码后从阻塞步骤继续，无需重新上传。"
+    ),
+    response_model=SubmitInputResponse,
+)
 def submit_input(
-    asset_id: UUID,
-    version_id: UUID,
+    asset_id: Annotated[UUID, Path(description="逻辑资产 ID")],
+    version_id: Annotated[UUID, Path(description="资产版本 ID")],
     body: SubmitInputRequest,
     service: Annotated[AssetService, Depends(_service)],
-) -> dict[str, str]:
+) -> SubmitInputResponse:
     """NEEDS_INPUT 恢复：补充 CRS 后从阻塞步骤继续，无需重新上传。"""
     version = service.get_version_required(asset_id, version_id)
     normalized_crs = body.crs.strip().upper()
     if _EPSG_PATTERN.fullmatch(normalized_crs) is None:
         raise validation_error(f"CRS 不合法：{body.crs!r}（应为 EPSG:4326 这类 EPSG 代码）")
     service.resume_from_needs_input(version, user_crs=normalized_crs)
-    return {"asset_version_id": str(version_id), "status": AssetVersionStatus.PROCESSING.value}
+    return SubmitInputResponse(
+        asset_version_id=str(version_id), status=AssetVersionStatus.PROCESSING.value
+    )
 
 
 def _artifact_kind(raw: str) -> ArtifactKind:

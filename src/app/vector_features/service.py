@@ -57,9 +57,7 @@ class VectorFeatureService:
             VectorFeature.asset_version_id == version_id,
             sa.func.ST_Intersects(VectorFeature.geometry, geom),
         )
-        total = int(
-            self._session.scalar(sa.select(sa.func.count()).where(*filters)) or 0
-        )
+        total = int(self._session.scalar(sa.select(sa.func.count()).where(*filters)) or 0)
         result = self._session.execute(
             sa.select(VectorFeature, sa.func.ST_AsGeoJSON(VectorFeature.geometry))
             .where(*filters)

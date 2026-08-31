@@ -91,8 +91,7 @@ def normalize_json_value(value: Any) -> Any:
         return {str(key): normalize_json_value(item) for key, item in value.items()}
     raise DeterministicError(
         "UNSUPPORTED_PROPERTY_TYPE",
-        f"矢量属性包含无法写入 JSONB 的类型 {type(value).__name__}；"
-        "请转换源数据属性后重新上传",
+        f"矢量属性包含无法写入 JSONB 的类型 {type(value).__name__}；请转换源数据属性后重新上传",
     )
 
 

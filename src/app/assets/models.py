@@ -196,9 +196,7 @@ class ObjectCleanupTask(Base, TimestampMixin):
     )
     last_error: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
 
-    __table_args__ = (
-        sa.Index("ix_object_cleanup_due", "status", "next_attempt_at", "created_at"),
-    )
+    __table_args__ = (sa.Index("ix_object_cleanup_due", "status", "next_attempt_at", "created_at"),)
 
 
 class RasterAssetVersion(Base):

@@ -82,6 +82,7 @@ doc/                # 总体架构、阶段方案、迁移矩阵、验收基线
 
 ```bash
 docker compose up -d --build
+./scripts/dev.sh                # 日常：只起基础设施，本机跑 API/Dispatcher/Worker
 uv sync --all-groups
 uv run pytest
 uv run pytest -m integration    # 需显式提供真实基础设施
@@ -90,7 +91,7 @@ uv run pyright
 uv run alembic upgrade head
 ```
 
-配置来自 `APP_` 前缀环境变量，见 `.env.example`。配置错误必须 fail fast，给出可定位的中文诊断。
+配置来自 `APP_` 前缀环境变量，见 `.env.example`（本机地址）。Compose 全栈在 `compose.yaml` 覆盖容器 DNS。配置错误必须 fail fast，给出可定位的中文诊断。
 
 ## 3. 核心工作原则
 

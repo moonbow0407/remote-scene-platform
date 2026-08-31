@@ -2,17 +2,18 @@
 
 import logging
 from collections.abc import Iterator
-from typing import Annotated, Any
+from typing import Annotated
 from uuid import UUID
 
 import sqlalchemy as sa
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Path, Request
 from sqlalchemy.orm import Session
 
 from app.assets.service import AssetService
 from app.db import session_scope
 from app.jobs.enums import JobStatus
 from app.jobs.models import JobEvent
+from app.jobs.schemas import CancelJobResponse, JobEventItem, JobResponse
 from app.jobs.service import JobService
 
 logger = logging.getLogger(__name__)
@@ -25,10 +26,20 @@ def _get_session(request: Request) -> Iterator[Session]:
         yield session
 
 
-@router.get("/{job_id}")
+@router.get(
+    "/{job_id}",
+    summary="查询任务",
+    description=(
+        "轮询入库或监测任务进度。首版不提供 SSE，请按此接口轮询。"
+        "NEEDS_INPUT 时到版本详情查看诊断并补 CRS。"
+    ),
+    response_model=JobResponse,
+)
 def get_job(
-    job_id: UUID, request: Request, session: Annotated[Session, Depends(_get_session)]
-) -> dict[str, Any]:
+    job_id: Annotated[UUID, Path(description="任务 ID")],
+    request: Request,
+    session: Annotated[Session, Depends(_get_session)],
+) -> JobResponse:
     service = JobService(session)
     job = service.get_required(job_id)
     events = session.scalars(
@@ -38,38 +49,47 @@ def get_job(
         .limit(200)
     )
     settings = request.app.state.settings
-    return {
-        "job_id": str(job.id),
-        "job_type": job.job_type.value,
-        "status": job.status.value,
-        "attempt": job.attempt,
-        "max_attempts": job.max_attempts,
-        "payload": job.payload,
-        "last_error": job.last_error,
-        "queued_at": job.queued_at.isoformat() if job.queued_at else None,
-        "started_at": job.started_at.isoformat() if job.started_at else None,
-        "finished_at": job.finished_at.isoformat() if job.finished_at else None,
-        "events": [
-            {
-                "event_type": e.event_type,
-                "from_status": e.from_status.value if e.from_status else None,
-                "to_status": e.to_status.value if e.to_status else None,
-                "detail": e.detail,
-                "created_at": e.created_at.isoformat(),
-            }
+    return JobResponse(
+        job_id=job.id,
+        job_type=job.job_type,
+        status=job.status,
+        attempt=job.attempt,
+        max_attempts=job.max_attempts,
+        payload=job.payload,
+        last_error=job.last_error,
+        queued_at=job.queued_at,
+        started_at=job.started_at,
+        finished_at=job.finished_at,
+        events=[
+            JobEventItem(
+                event_type=e.event_type,
+                from_status=e.from_status,
+                to_status=e.to_status,
+                detail=e.detail,
+                created_at=e.created_at,
+            )
             for e in events
         ],
-        "_poll_hint": f"GET {settings.public_base_url}/api/v1/jobs/{job.id}",
-    }
+        poll_hint=f"GET {settings.public_base_url}/api/v1/jobs/{job.id}",
+    )
 
 
-@router.post("/{job_id}/cancel")
+@router.post(
+    "/{job_id}/cancel",
+    summary="取消任务",
+    description=(
+        "排队中的任务立即取消；运行中的任务记为 CANCEL_REQUESTED，"
+        "在下一个处理步骤检查点进入 CANCELLED。"
+    ),
+    response_model=CancelJobResponse,
+)
 def cancel_job(
-    job_id: UUID, session: Annotated[Session, Depends(_get_session)]
-) -> dict[str, str]:
+    job_id: Annotated[UUID, Path(description="任务 ID")],
+    session: Annotated[Session, Depends(_get_session)],
+) -> CancelJobResponse:
     """请求取消；排队任务立即取消，运行中任务在下一个处理步骤检查点停止。"""
     jobs = JobService(session)
     job = jobs.request_cancel(jobs.get_required(job_id))
     if job.asset_version_id is not None and job.status is JobStatus.CANCELLED:
         AssetService(session).mark_version_cancelled(job.asset_version_id)
-    return {"job_id": str(job.id), "status": job.status.value}
+    return CancelJobResponse(job_id=job.id, status=job.status)

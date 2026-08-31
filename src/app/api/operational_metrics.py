@@ -42,11 +42,7 @@ def refresh_database_metrics(factory: sessionmaker[Session]) -> None:
                     session.scalar(
                         sa.select(sa.func.count())
                         .select_from(OutboxEvent)
-                        .where(
-                            OutboxEvent.status.in_(
-                                (OutboxStatus.PENDING, OutboxStatus.CLAIMED)
-                            )
-                        )
+                        .where(OutboxEvent.status.in_((OutboxStatus.PENDING, OutboxStatus.CLAIMED)))
                     )
                     or 0
                 )
@@ -126,9 +122,7 @@ def refresh_database_metrics(factory: sessionmaker[Session]) -> None:
         logger.warning("数据库运维指标采集失败", extra={"detail": str(exc)})
 
 
-async def refresh_rabbitmq_metrics(
-    settings: Settings, factory: sessionmaker[Session]
-) -> None:
+async def refresh_rabbitmq_metrics(settings: Settings, factory: sessionmaker[Session]) -> None:
     """读取 RabbitMQ Management API；不可达不影响 Prometheus 抓取本身。"""
     encoded_vhost = quote("/", safe="")
     url = f"{settings.rabbitmq_management_url.rstrip('/')}/api/queues/{encoded_vhost}/geo"

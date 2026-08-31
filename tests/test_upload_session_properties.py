@@ -155,6 +155,39 @@ def test_create_session_persists_batch_properties(
         session_obj.close()
 
 
+def test_create_session_first_class_acquired_at_wins(
+    factory: sessionmaker[Session],
+) -> None:
+    minio = _RecordingMinio()
+    asset_id = _create_asset(factory)
+    acquired = datetime(2026, 8, 1, tzinfo=UTC)
+
+    session_obj = factory()
+    try:
+        created, _urls = UploadService(
+            session=session_obj,
+            minio=minio,
+            settings=Settings(),  # type: ignore[arg-type]
+        ).create_session(
+            asset_name="时间字段",
+            asset_type=AssetType.RASTER,
+            file_name="c.tif",
+            size_bytes=8,
+            part_count=1,
+            content_type=None,
+            properties={},
+            source=AssetSource.UPLOAD,
+            asset_id=asset_id,
+            acquired_at=acquired,
+        )
+        stored = session_obj.get(UploadSession, created.id)
+        assert stored is not None
+        assert stored.properties["acquired_at"] == acquired.isoformat()
+    finally:
+        session_obj.rollback()
+        session_obj.close()
+
+
 def test_complete_session_uses_session_properties_for_new_version(
     factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
 ) -> None:

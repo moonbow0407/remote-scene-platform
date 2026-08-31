@@ -148,11 +148,15 @@ class AssetLifecycleService:
         if JobService(self._session).has_active_for_versions(version_ids):
             self._defer_asset(asset, "仍有 Worker 持有执行租约，等待取消检查点", ts, 60)
             return False
-        artifacts = list(
-            self._session.scalars(
-                sa.select(AssetArtifact).where(AssetArtifact.asset_version_id.in_(version_ids))
+        artifacts = (
+            list(
+                self._session.scalars(
+                    sa.select(AssetArtifact).where(AssetArtifact.asset_version_id.in_(version_ids))
+                )
             )
-        ) if version_ids else []
+            if version_ids
+            else []
+        )
         blob_ids = {row.blob_id for row in versions if row.blob_id is not None}
 
         # 使用数据库级级联删除，不让 ORM 把不可空 asset_id 尝试更新为 NULL。
@@ -264,9 +268,7 @@ class ObjectCleanupService:
         try:
             if task.kind is ObjectCleanupKind.BLOB and task.blob_id is not None:
                 blob = self._session.scalar(
-                    sa.select(ObjectBlob)
-                    .where(ObjectBlob.id == task.blob_id)
-                    .with_for_update()
+                    sa.select(ObjectBlob).where(ObjectBlob.id == task.blob_id).with_for_update()
                 )
                 if blob is not None:
                     actual = int(

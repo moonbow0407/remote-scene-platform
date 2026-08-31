@@ -26,16 +26,10 @@ RABBITMQ_QUEUE_DEPTH = Gauge(
 )
 JOBS_BY_STATUS = Gauge("remote_scene_jobs", "当前 Job 数", ["status"])
 JOB_FAILURES_24H = Gauge("remote_scene_job_failures_24h", "最近 24 小时失败 Job 数")
-JOB_DURATION = Gauge(
-    "remote_scene_job_duration_seconds", "已完成 Job 处理时长", ["aggregation"]
-)
+JOB_DURATION = Gauge("remote_scene_job_duration_seconds", "已完成 Job 处理时长", ["aggregation"])
 WORKER_UTILIZATION = Gauge(
     "remote_scene_worker_utilization_ratio", "运行中 Job 数 / RabbitMQ geo 消费者数"
 )
 WORKER_CONSUMERS = Gauge("remote_scene_worker_consumers", "RabbitMQ geo 队列消费者数")
-STORAGE_BYTES = Gauge(
-    "remote_scene_storage_bytes", "数据库登记的 MinIO 对象字节数", ["kind"]
-)
-CLEANUP_BACKLOG = Gauge(
-    "remote_scene_cleanup_backlog", "待执行或重试中的对象清理任务数"
-)
+STORAGE_BYTES = Gauge("remote_scene_storage_bytes", "数据库登记的 MinIO 对象字节数", ["kind"])
+CLEANUP_BACKLOG = Gauge("remote_scene_cleanup_backlog", "待执行或重试中的对象清理任务数")
