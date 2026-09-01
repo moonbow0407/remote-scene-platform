@@ -13,6 +13,9 @@
 - 快照损坏（版本缺失/非 READY/归属不一致）是确定性错误：Run 与 Job 直接 FAILED，
   不自动重试；
 - 成功落库后的重复消息（Run 已 SUCCEEDED）只补齐 Job 终态，不重复审计。
+- Job 或 Run 已删除（计划物理删除 / 资产清理）时必须 ACK 投递：抛给 Celery
+  （acks_late）会堵塞共享 geo 队列；Run 缺失时还需把仍在的 Job 落 FAILED，
+  避免租约过期后被恢复器再次投入队列。
 """
 
 from __future__ import annotations
@@ -27,9 +30,11 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.assets.enums import AssetStatus
 from app.assets.models import DataAsset
 from app.db import create_engine, make_session_factory, session_scope
+from app.errors import ProblemError
 from app.jobs.enums import JobStatus
 from app.jobs.heartbeat import LeaseHeartbeat
 from app.jobs.service import JobService
+from app.jobs.state_machine import is_transition_allowed
 from app.monitoring.enums import RunStatus
 from app.monitoring.models import MonitoringRun
 from app.monitoring.service import MonitoringService
@@ -70,6 +75,9 @@ def execute_monitoring_run(job_id: str, *, factory: sessionmaker[Session] | None
         claim = JobService(session).claim_for_run(
             job_id_int, lease_ttl_seconds=settings.job_lease_ttl_seconds
         )
+        if claim is None:
+            logger.info("监测任务已删除，确认投递", extra={"job_id": job_id})
+            return
         if not claim.acquired:
             logger.info(
                 "监测执行重复投递或执行权在他人手中，忽略",
@@ -127,7 +135,10 @@ def execute_monitoring_run(job_id: str, *, factory: sessionmaker[Session] | None
         detail = {"code": "TRANSIENT", "detail": str(exc), "transient": True}
         with session_scope(session_factory) as session:
             jobs = JobService(session)
-            job = jobs.get_required(job_id_int)
+            job = jobs.get(job_id_int)
+            if job is None:
+                logger.info("监测任务已删除，确认投递", extra={"job_id": job_id})
+                return
             event = jobs.schedule_retry(job, detail=detail)
             if event is None:
                 # 重试耗尽：schedule_retry 已把 Job 置 FAILED，这里同步 Run 终态
@@ -139,6 +150,18 @@ def execute_monitoring_run(job_id: str, *, factory: sessionmaker[Session] | None
                 "监测执行瞬时错误，重投事件已写入 Outbox 按指数退避重试",
                 extra={"job_id": job_id, "attempt": attempt, "detail": str(exc)},
             )
+        return
+    except ProblemError as exc:
+        if exc.status != 404:
+            raise
+        with session_scope(session_factory) as session:
+            _fail_job_in_session(
+                session,
+                job_id_int,
+                code="MONITORING_NOT_FOUND",
+                detail=str(exc.detail or exc),
+            )
+        logger.info("监测资源已不存在，确认投递", extra={"job_id": job_id})
         return
     except Exception as exc:
         # Worker 系统边界必须落状态和诊断；未知异常不自动重试，随后重新抛出保留堆栈
@@ -166,7 +189,19 @@ def _audit_and_finalize(
     """
     with session_scope(session_factory) as session:
         monitoring = MonitoringService(session)
-        run = monitoring.get_run_required(run_id)
+        run = session.get(MonitoringRun, run_id)
+        if run is None:
+            logger.info(
+                "监测执行已不存在，任务按终态收尾并确认投递",
+                extra={"job_id": str(job_id), "run_id": str(run_id)},
+            )
+            _fail_job_in_session(
+                session,
+                job_id,
+                code="MONITORING_RUN_GONE",
+                detail=f"监测执行 {run_id} 不存在（计划可能已删除）",
+            )
+            return None
         if run.status is RunStatus.SUCCEEDED:
             # 成功已落库而消息重投：只补齐 Job 终态（幂等收尾）
             _finish_job(session, job_id)
@@ -203,33 +238,48 @@ def _verify_snapshot(session: Session, run: MonitoringRun) -> list[str]:
 
 
 def _finish_job(session: Session, job_id: int) -> None:
-    """Job 成功收尾（RUNNING → SUCCEEDED）；已成功时幂等跳过。"""
-    job = JobService(session).get_required(job_id)
-    if job.status is not JobStatus.SUCCEEDED:
-        JobService(session).transition(job, JobStatus.SUCCEEDED, event_type="JOB_SUCCEEDED")
+    """Job 成功收尾（RUNNING → SUCCEEDED）；已成功或已删除时幂等跳过。"""
+    job = JobService(session).get(job_id)
+    if job is None or job.status is JobStatus.SUCCEEDED:
+        return
+    JobService(session).transition(job, JobStatus.SUCCEEDED, event_type="JOB_SUCCEEDED")
 
 
 def _fail_job_in_session(session: Session, job_id: int, *, code: str, detail: str) -> None:
-    """Job 确定性失败收尾（RUNNING → FAILED）；已终态时幂等跳过。"""
-    job = JobService(session).get_required(job_id)
-    if job.status is not JobStatus.FAILED:
-        JobService(session).transition(
-            job,
-            JobStatus.FAILED,
-            event_type="JOB_FAILED",
-            detail={"code": code, "detail": detail, "transient": False},
-        )
+    """Job 确定性失败收尾（RUNNING → FAILED）；已删除或已终态时幂等跳过。"""
+    job = JobService(session).get(job_id)
+    if job is None:
+        return
+    if job.status is JobStatus.FAILED:
         job.last_error = {"code": code, "detail": detail, "transient": False}
+        return
+    if not is_transition_allowed(job.status, JobStatus.FAILED):
+        logger.warning(
+            "任务 %s 当前状态为 %s，无法落 FAILED",
+            job_id,
+            job.status,
+        )
+        return
+    JobService(session).transition(
+        job,
+        JobStatus.FAILED,
+        event_type="JOB_FAILED",
+        detail={"code": code, "detail": detail, "transient": False},
+    )
+    job.last_error = {"code": code, "detail": detail, "transient": False}
 
 
 def _finalize_run_failure(session: Session, run_id: int, *, detail: str) -> None:
-    """把 Run 推进到 FAILED 终态；已成功或已失败时保留现状态。
+    """把 Run 推进到 FAILED 终态；已成功、已失败或已删除时保留现状态。
 
     重试耗尽等路径下 Run 可能仍处于 PENDING（上次尝试未及提交开始标记），
     经幂等的 mark_run_started 先归位 RUNNING 再失败，满足 Run 状态机约束。
     """
     monitoring = MonitoringService(session)
-    run = monitoring.get_run_required(run_id)
+    run = session.get(MonitoringRun, run_id)
+    if run is None:
+        logger.info("监测执行已不存在，跳过 Run 失败收尾", extra={"run_id": str(run_id)})
+        return
     if run.status in (RunStatus.SUCCEEDED, RunStatus.FAILED):
         logger.warning("Run %s 已处于终态 %s，保留现状态", run_id, run.status)
         return

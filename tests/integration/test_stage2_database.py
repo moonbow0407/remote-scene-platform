@@ -127,6 +127,7 @@ def test_pending_job_is_claimed_once_under_duplicate_delivery(
     def claim() -> tuple[JobStatus, bool]:
         with session_scope(factory) as session:
             result = JobService(session).claim_for_run(job_id)
+            assert result is not None
             return result.job.status, result.acquired
 
     with ThreadPoolExecutor(max_workers=2) as executor:

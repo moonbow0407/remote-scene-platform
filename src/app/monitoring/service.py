@@ -29,6 +29,7 @@ from app.catalogs.service import CatalogService
 from app.context import ActorContext, get_actor, now_utc
 from app.ecology.service import EcologyService
 from app.errors import ProblemError, conflict, not_found, validation_error
+from app.jobs.service import JobService
 from app.monitoring.dispatch import JobRunDispatcher
 from app.monitoring.enums import (
     OccurrenceStatus,
@@ -273,8 +274,22 @@ class MonitoringService:
         """物理删除计划（关联 occurrence/Run/快照随数据库级联删除）。
 
         软删除与 7 天恢复期仅用于资产；计划删除为物理删除。
+        Job 与 Outbox 不在级联链上（monitoring_run.job_id 为 ON DELETE SET NULL，
+        Outbox 无外键）：必须先按 Run 收掉，否则已投递消息会在 Worker 上因
+        缺失 Run 反复失败，或租约过期后被恢复器再次投入 geo 队列。
         """
         plan = self.get_plan_required(plan_id)
+        job_ids = [
+            job_id
+            for job_id in self._session.scalars(
+                sa.select(MonitoringRun.job_id).where(
+                    MonitoringRun.plan_id == plan_id,
+                    MonitoringRun.job_id.is_not(None),
+                )
+            )
+            if job_id is not None
+        ]
+        JobService(self._session).delete_jobs_and_outbox(job_ids)
         self._session.delete(plan)
         self._session.flush()
 

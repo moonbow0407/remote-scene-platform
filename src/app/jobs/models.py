@@ -98,7 +98,12 @@ class JobEvent(Base):
 
 
 class OutboxEvent(Base, TimestampMixin):
-    """Transactional Outbox：与业务写入同事务提交，由 Dispatcher 至少一次投递。"""
+    """Transactional Outbox：与业务写入同事务提交，由 Dispatcher 至少一次投递。
+
+    与 Job 无外键（aggregate_id 是通用关联）。删除 Job 必须经
+    JobService.delete_jobs_and_outbox 同时收掉对应事件，否则 Dispatcher
+    会把已删除任务再次投进共享 geo 队列。
+    """
 
     __tablename__ = "outbox_event"
 

@@ -156,6 +156,39 @@ class JobService:
             )
         )
 
+    def delete_outbox_for_jobs(self, job_ids: list[int]) -> None:
+        """删除指定 Job 的全部 Outbox 事件（Outbox 与 Job 无外键，必须显式收掉）。"""
+        if not job_ids:
+            return
+        self._session.execute(
+            sa.delete(OutboxEvent).where(
+                OutboxEvent.aggregate_type == "job",
+                OutboxEvent.aggregate_id.in_(job_ids),
+            )
+        )
+
+    def delete_jobs_and_outbox(self, job_ids: list[int]) -> None:
+        """删除 Job 及其 JobEvent、Outbox 事件。
+
+        计划物理删除、资产过期清理必须走这里：否则已投递或待投递消息在
+        Worker（acks_late）上因缺失 Job 而无限重试，堵塞共享 geo 队列。
+        """
+        if not job_ids:
+            return
+        self.delete_outbox_for_jobs(job_ids)
+        self._session.execute(sa.delete(JobEvent).where(JobEvent.job_id.in_(job_ids)))
+        self._session.execute(sa.delete(Job).where(Job.id.in_(job_ids)))
+        self._session.flush()
+
+    def delete_jobs_and_outbox_for_assets(self, asset_ids: list[int]) -> None:
+        """按资产引用删除入库任务及其 Outbox（须在删除 data_asset 行之前调用）。"""
+        if not asset_ids:
+            return
+        job_ids = list(
+            self._session.scalars(sa.select(Job.id).where(Job.asset_id.in_(asset_ids)))
+        )
+        self.delete_jobs_and_outbox(job_ids)
+
     def transition(
         self,
         job: Job,
@@ -257,19 +290,21 @@ class JobService:
 
     def claim_for_run(
         self, job_id: int, *, lease_ttl_seconds: int = _DEFAULT_LEASE_TTL_SECONDS
-    ) -> JobClaim:
+    ) -> JobClaim | None:
         """Worker 认领：QUEUED/RETRYING/PENDING → RUNNING，并取得执行租约。
 
         行锁保证同一 Job 同一时刻只有一个调用者 acquired=True。
         执行权以租约为准：RUNNING 且租约未过期 → 重复投递，跳过；
         RUNNING 但租约缺失或已过期 → 执行者已失联，回收后重新认领
         （Worker 崩溃后消息可能已被 ACK，恢复由独立恢复器按租约过期兜底）。
+
+        返回 None 表示 Job 已不存在（资产清理或计划删除已收掉任务）。
+        Worker 必须正常返回以 ACK 投递，禁止把 404 抛给 Celery（acks_late
+        会把消息重新入队，堵塞共享 geo 队列）。
         """
         job = self._session.scalar(sa.select(Job).where(Job.id == job_id).with_for_update())
         if job is None:
-            from app.errors import not_found
-
-            raise not_found("任务", job_id)
+            return None
         now = now_utc()
         if job.status is JobStatus.RUNNING and not self._lease_valid(job, now):
             logger.warning(
@@ -337,6 +372,21 @@ class OutboxRepository:
             row.claimed_at = now
             row.claim_expires_at = now + timedelta(seconds=claim_ttl_seconds)
         return rows
+
+    def discard_missing_jobs(self, events: list[OutboxEvent]) -> list[OutboxEvent]:
+        """丢掉指向已删除 Job 的事件，避免向 geo 队列投递永远无法认领的消息。"""
+        surviving: list[OutboxEvent] = []
+        for event in events:
+            if event.aggregate_type == "job" and self._session.get(Job, event.aggregate_id) is None:
+                logger.info(
+                    "丢弃已删除任务的 Outbox 事件",
+                    extra={"event_id": str(event.id), "job_id": str(event.aggregate_id)},
+                )
+                self._session.delete(event)
+                continue
+            surviving.append(event)
+        self._session.flush()
+        return surviving
 
     def mark_published(self, event: OutboxEvent) -> None:
         event.status = OutboxStatus.PUBLISHED

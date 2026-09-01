@@ -10,6 +10,8 @@
 执行权与崩溃恢复：认领时取得租约并在运行期间由后台心跳续约；Worker 崩溃后租约
 过期，由独立恢复器（app.recovery）回收重投，不依赖 Broker 重投消息恰好到达。
 所有步骤幂等：重复投递或重试不会产生重复工件，也不会回退已完成的状态。
+Job 已删除（资产清理 CASCADE/显式收掉）时必须正常返回以 ACK 投递：acks_late
+下抛异常会把消息重新入队，堵塞共享 geo 队列。
 """
 
 import logging
@@ -25,6 +27,7 @@ from app.assets.service import AssetService
 from app.db import create_engine, make_session_factory, session_scope
 from app.jobs.enums import JobStatus
 from app.jobs.heartbeat import LeaseHeartbeat
+from app.jobs.models import Job
 from app.jobs.service import JobService
 from app.processing.attachment_ingestion import AttachmentIngestion
 from app.processing.common import IngestionContext
@@ -64,6 +67,14 @@ _MISSING_FIELDS_BY_REASON: dict[str, list[str]] = {
 }
 
 
+def _load_job(session: Any, job_id: int, job_id_label: str) -> Job | None:
+    """终态落库时取 Job；已删除则返回 None，调用方必须 ACK 而非抛错。"""
+    job = JobService(session).get(job_id)
+    if job is None:
+        logger.info("任务已删除，确认投递", extra={"job_id": job_id_label})
+    return job
+
+
 def _execute_ingestion(self: Any, job_id: str, runner: Any, label: str) -> None:
     settings = get_settings()
     factory = _get_factory()
@@ -72,6 +83,9 @@ def _execute_ingestion(self: Any, job_id: str, runner: Any, label: str) -> None:
     with session_scope(factory) as session:
         jobs = JobService(session)
         claim = jobs.claim_for_run(job_id_int, lease_ttl_seconds=settings.job_lease_ttl_seconds)
+        if claim is None:
+            logger.info("任务已删除，确认投递", extra={"job_id": job_id})
+            return
         if not claim.acquired:
             logger.info(
                 "任务重复投递或执行权在他人手中，忽略",
@@ -109,8 +123,9 @@ def _execute_ingestion(self: Any, job_id: str, runner: Any, label: str) -> None:
     except NeedsInputError as exc:
         with session_scope(factory) as session:
             jobs = JobService(session)
-            job = jobs.get(job_id_int)
-            assert job is not None
+            job = _load_job(session, job_id_int, job_id)
+            if job is None:
+                return
             jobs.transition(
                 job,
                 JobStatus.NEEDS_INPUT,
@@ -142,7 +157,9 @@ def _execute_ingestion(self: Any, job_id: str, runner: Any, label: str) -> None:
         detail = f"任务超过软时限 {settings.worker_task_soft_timeout_seconds} 秒，已停止处理"
         with session_scope(factory) as session:
             jobs = JobService(session)
-            job = jobs.get_required(job_id_int)
+            job = _load_job(session, job_id_int, job_id)
+            if job is None:
+                return
             jobs.transition(
                 job,
                 JobStatus.FAILED,
@@ -156,8 +173,9 @@ def _execute_ingestion(self: Any, job_id: str, runner: Any, label: str) -> None:
     except DeterministicError as exc:
         with session_scope(factory) as session:
             jobs = JobService(session)
-            job = jobs.get(job_id_int)
-            assert job is not None
+            job = _load_job(session, job_id_int, job_id)
+            if job is None:
+                return
             jobs.transition(
                 job,
                 JobStatus.FAILED,
@@ -180,8 +198,9 @@ def _execute_ingestion(self: Any, job_id: str, runner: Any, label: str) -> None:
         detail = {"code": "TRANSIENT", "detail": str(exc), "transient": True}
         with session_scope(factory) as session:
             jobs = JobService(session)
-            job = jobs.get(job_id_int)
-            assert job is not None
+            job = _load_job(session, job_id_int, job_id)
+            if job is None:
+                return
             event = jobs.schedule_retry(job, detail=detail)
             if event is None:
                 # 重试次数耗尽：schedule_retry 已把 Job 置 FAILED，这里同步版本终态
@@ -209,8 +228,9 @@ def _execute_ingestion(self: Any, job_id: str, runner: Any, label: str) -> None:
         detail = str(exc)
         with session_scope(factory) as session:
             jobs = JobService(session)
-            job = jobs.get(job_id_int)
-            assert job is not None
+            job = _load_job(session, job_id_int, job_id)
+            if job is None:
+                return
             jobs.transition(
                 job,
                 JobStatus.FAILED,

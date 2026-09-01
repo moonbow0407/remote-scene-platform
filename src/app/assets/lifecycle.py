@@ -125,6 +125,9 @@ class AssetLifecycleService:
             for key in (asset.original_object_key, asset.cog_object_key, asset.thumbnail_object_key)
             if key
         ]
+        # Job.asset_id 虽 CASCADE，Outbox 无外键：必须先收掉 Job/Outbox，
+        # 否则 Dispatcher 仍会把已删除任务投进共享 geo 队列。
+        JobService(self._session).delete_jobs_and_outbox_for_assets([asset_id])
         self._session.execute(sa.delete(DataAsset).where(DataAsset.id == asset_id))
         self._session.flush()
         for key in keys:

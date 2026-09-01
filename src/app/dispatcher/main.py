@@ -96,8 +96,11 @@ def main() -> None:
                     continue
 
                 with session_scope(factory) as session:
-                    pending = OutboxRepository(session).claim_batch(
-                        batch_size=_BATCH_SIZE, claim_ttl_seconds=_CLAIM_TTL_SECONDS
+                    repo = OutboxRepository(session)
+                    pending = repo.discard_missing_jobs(
+                        repo.claim_batch(
+                            batch_size=_BATCH_SIZE, claim_ttl_seconds=_CLAIM_TTL_SECONDS
+                        )
                     )
                 if not pending:
                     time.sleep(_POLL_SECONDS)
