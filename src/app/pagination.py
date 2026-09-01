@@ -5,8 +5,12 @@ from typing import Annotated
 from fastapi import Query
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.query import blank_as_default
+
 # page_size 上限防止一次性拉取超大列表拖垮 API 与数据库
 MAX_PAGE_SIZE = 200
+_DEFAULT_PAGE = 1
+_DEFAULT_PAGE_SIZE = 20
 
 
 class PageParams:
@@ -14,10 +18,16 @@ class PageParams:
 
     def __init__(
         self,
-        page: Annotated[int, Query(ge=1, description="页码，从 1 开始")] = 1,
+        page: Annotated[
+            int,
+            blank_as_default(_DEFAULT_PAGE),
+            Query(ge=1, description="页码，从 1 开始"),
+        ] = _DEFAULT_PAGE,
         page_size: Annotated[
-            int, Query(ge=1, le=MAX_PAGE_SIZE, description=f"每页条数，上限 {MAX_PAGE_SIZE}")
-        ] = 20,
+            int,
+            blank_as_default(_DEFAULT_PAGE_SIZE),
+            Query(ge=1, le=MAX_PAGE_SIZE, description=f"每页条数，上限 {MAX_PAGE_SIZE}"),
+        ] = _DEFAULT_PAGE_SIZE,
     ) -> None:
         self.page = page
         self.page_size = page_size

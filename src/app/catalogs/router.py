@@ -12,6 +12,7 @@ from app.catalogs.service import CatalogService
 from app.context import ActorContext
 from app.db import session_scope
 from app.pagination import Page, PageParams
+from app.query import BlankAsNone
 
 router = APIRouter(prefix="/categories", tags=["分类"])
 
@@ -38,7 +39,7 @@ def _response(row: object) -> CategoryResponse:
 def list_categories(
     service: Annotated[CatalogService, Depends(_get_service)],
     pagination: Annotated[PageParams, Depends()],
-    q: Annotated[str | None, Query(description="按名称模糊查找")] = None,
+    q: Annotated[str | None, BlankAsNone, Query(description="按名称模糊查找")] = None,
 ) -> Page[CategoryResponse]:
     page = service.list_categories(pagination, q=q)
     return Page[CategoryResponse](

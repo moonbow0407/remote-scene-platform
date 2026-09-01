@@ -22,6 +22,7 @@ from app.ecology.schemas import (
 )
 from app.ecology.service import EcologyService
 from app.pagination import Page, PageParams
+from app.query import BlankAsNone, blank_as_default
 
 router = APIRouter(prefix="/ecology", tags=["生态"])
 
@@ -57,11 +58,18 @@ def list_parameters(
     service: Annotated[EcologyService, Depends(_get_service)],
     status: Annotated[
         EcologicalParameterStatus | None,
+        BlankAsNone,
         Query(description="按是否启用过滤；不传则不限"),
     ] = None,
-    parent_id: Annotated[int | None, Query(description="父参数编号；不传则不限")] = None,
-    code: Annotated[str | None, Query(max_length=64, description="业务编码，精确匹配")] = None,
-    root_only: Annotated[bool, Query(description="true 时只返回顶层参数")] = False,
+    parent_id: Annotated[
+        int | None, BlankAsNone, Query(description="父参数编号；不传则不限")
+    ] = None,
+    code: Annotated[
+        str | None, BlankAsNone, Query(max_length=64, description="业务编码，精确匹配")
+    ] = None,
+    root_only: Annotated[
+        bool, blank_as_default(False), Query(description="true 时只返回顶层参数")
+    ] = False,
 ) -> Page[EcologicalParameterResponse]:
     page = service.list_parameters(
         params, status=status, parent_id=parent_id, code=code, root_only=root_only
@@ -78,7 +86,9 @@ def list_parameters(
 def parameter_tree(
     service: Annotated[EcologyService, Depends(_get_service)],
     status: Annotated[
-        EcologicalParameterStatus | None, Query(description="按是否启用过滤；不传则返回全部")
+        EcologicalParameterStatus | None,
+        BlankAsNone,
+        Query(description="按是否启用过滤；不传则返回全部"),
     ] = None,
 ) -> list[EcologicalParameterTreeNode]:
     return service.parameter_tree(status=status)
@@ -152,8 +162,10 @@ def delete_parameter(
 def list_mappings(
     params: Annotated[PageParams, Depends()],
     service: Annotated[EcologyService, Depends(_get_service)],
-    ecological_parameter_id: Annotated[int | None, Query(description="按生态参数编号过滤")] = None,
-    category_id: Annotated[int | None, Query(description="按分类编号过滤")] = None,
+    ecological_parameter_id: Annotated[
+        int | None, BlankAsNone, Query(description="按生态参数编号过滤")
+    ] = None,
+    category_id: Annotated[int | None, BlankAsNone, Query(description="按分类编号过滤")] = None,
 ) -> Page[MappingResponse]:
     page = service.list_mappings(
         params,

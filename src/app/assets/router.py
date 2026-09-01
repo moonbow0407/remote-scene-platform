@@ -29,6 +29,7 @@ from app.catalogs.models import Category
 from app.db import session_scope
 from app.errors import validation_error
 from app.pagination import Page, PageParams
+from app.query import BlankAsNone, blank_as_default
 from app.settings import Settings
 from app.uploads.minio import MinioAdapter
 
@@ -111,11 +112,13 @@ def _detail(service: AssetService, asset: DataAsset) -> AssetDetailResponse:
 def list_assets(
     service: Annotated[AssetService, Depends(_service)],
     pagination: Annotated[PageParams, Depends()],
-    name: Annotated[str | None, Query(description="按显示名称模糊查找")] = None,
-    category_id: Annotated[int | None, Query(description="分类编号")] = None,
-    asset_type: Annotated[AssetType | None, Query(description="文件种类")] = None,
-    status: Annotated[AssetStatus | None, Query(description="处理状态")] = None,
-    deleted: Annotated[bool, Query(description="true 只列出回收站")] = False,
+    name: Annotated[str | None, BlankAsNone, Query(description="按显示名称模糊查找")] = None,
+    category_id: Annotated[int | None, BlankAsNone, Query(description="分类编号")] = None,
+    asset_type: Annotated[AssetType | None, BlankAsNone, Query(description="文件种类")] = None,
+    status: Annotated[AssetStatus | None, BlankAsNone, Query(description="处理状态")] = None,
+    deleted: Annotated[
+        bool, blank_as_default(False), Query(description="true 只列出回收站")
+    ] = False,
 ) -> Page[AssetListItem]:
     rows, total = service.list_assets(
         name=name,

@@ -101,6 +101,7 @@ def create_app() -> FastAPI:
             "路径都以 `/api/v1` 开头。\n\n"
             "成功时直接返回资源对象，没有 `code` / `msg` / `data` 外层包装。\n"
             "列表一律是 `items`、`total`、`page`、`page_size`。\n"
+            "GET 查询参数里的空字符串视为未传；JSON 请求体仍按类型校验。\n"
             "出错时 HTTP 状态码不是 200，类型是 `application/problem+json`，请看 `code`。\n"
             "时间一律带时区。\n"
             "空间范围只接受经纬度（EPSG:4326）的 GeoJSON 多边形（Polygon 或 MultiPolygon）。\n"

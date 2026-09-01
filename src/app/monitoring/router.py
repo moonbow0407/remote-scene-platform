@@ -28,6 +28,7 @@ from app.monitoring.schemas import (
 )
 from app.monitoring.service import MonitoringService, PlanView, RunView
 from app.pagination import Page, PageParams
+from app.query import BlankAsNone
 
 router = APIRouter(prefix="/monitoring", tags=["监测"])
 
@@ -103,7 +104,9 @@ def list_plans(
     session: Annotated[Session, Depends(_get_session)],
     service: Annotated[MonitoringService, Depends(_get_service)],
     status: Annotated[
-        PlanStatus | None, Query(description="按是否还在自动执行过滤；不传则不限")
+        PlanStatus | None,
+        BlankAsNone,
+        Query(description="按是否还在自动执行过滤；不传则不限"),
     ] = None,
 ) -> Page[PlanSummaryResponse]:
     page = service.list_plans(params, status=status)
@@ -243,6 +246,7 @@ def list_runs(
     service: Annotated[MonitoringService, Depends(_get_service)],
     status: Annotated[
         RunStatus | None,
+        BlankAsNone,
         Query(description="按执行状态过滤；不传则不限"),
     ] = None,
 ) -> Page[RunResponse]:
