@@ -1,0 +1,84 @@
+"""OpenAPI 导出给 Apifox 用的形状：3.0 nullable、单一 Bearer、空 Query 合法。"""
+
+from app.openapi_compat import polish_openapi
+
+
+def test_collapse_optional_enum_and_int() -> None:
+    polished = polish_openapi(
+        {
+            "openapi": "3.1.0",
+            "components": {"securitySchemes": {"HTTPBearer": {"type": "http", "scheme": "bearer"}}},
+            "paths": {
+                "/api/v1/assets": {
+                    "get": {
+                        "security": [{"HTTPBearer": []}],
+                        "parameters": [
+                            {
+                                "name": "category_id",
+                                "in": "query",
+                                "required": False,
+                                "schema": {
+                                    "anyOf": [{"type": "integer"}, {"type": "null"}],
+                                    "title": "Category Id",
+                                },
+                            },
+                            {
+                                "name": "status",
+                                "in": "query",
+                                "required": False,
+                                "schema": {
+                                    "anyOf": [
+                                        {"$ref": "#/components/schemas/AssetStatus"},
+                                        {"type": "null"},
+                                    ]
+                                },
+                            },
+                            {
+                                "name": "page",
+                                "in": "query",
+                                "required": False,
+                                "schema": {"type": "integer", "ge": 1, "le": 200, "default": 1},
+                            },
+                        ],
+                    }
+                }
+            },
+        }
+    )
+    assert polished["openapi"] == "3.0.3"
+    assert "HTTPBearer" not in polished["components"]["securitySchemes"]
+    assert polished["components"]["securitySchemes"]["BearerAuth"]["scheme"] == "bearer"
+    operation = polished["paths"]["/api/v1/assets"]["get"]
+    params = {item["name"]: item for item in operation["parameters"]}
+    assert params["category_id"]["allowEmptyValue"] is True
+    assert params["category_id"]["schema"]["type"] == "integer"
+    assert params["category_id"]["schema"]["nullable"] is True
+    assert "anyOf" not in params["category_id"]["schema"]
+    assert params["status"]["schema"]["allOf"] == [{"$ref": "#/components/schemas/AssetStatus"}]
+    assert params["status"]["schema"]["nullable"] is True
+    assert params["page"]["schema"]["minimum"] == 1
+    assert params["page"]["schema"]["maximum"] == 200
+    assert "ge" not in params["page"]["schema"]
+    assert operation["security"] == [{"BearerAuth": []}]
+
+
+def test_app_openapi_is_apifox_friendly() -> None:
+    from app.api.app import create_app
+    from app.settings import get_settings
+
+    get_settings.cache_clear()
+    schema = create_app().openapi()
+    assert schema["openapi"].startswith("3.0")
+    assert "HTTPBearer" not in schema["components"]["securitySchemes"]
+    params = {item["name"]: item for item in schema["paths"]["/api/v1/assets"]["get"]["parameters"]}
+    assert "anyOf" not in params["category_id"]["schema"]
+    assert params["category_id"]["allowEmptyValue"] is True
+    assert params["asset_type"]["schema"]["nullable"] is True
+    search = schema["components"]["schemas"]["SearchRequest"]
+    spatial = search["properties"]["spatial_geojson"]
+    assert spatial.get("example") is None
+    assert spatial.get("examples") is None
+    assert search.get("example") == {"page": 1, "page_size": 20} or search.get("examples") is None
+    security = schema["paths"]["/api/v1/assets"]["get"].get("security", schema["security"])
+    assert security == [{"BearerAuth": []}]
+    assert schema["paths"]["/api/v1/auth/login"]["post"]["security"] == []

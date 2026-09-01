@@ -111,13 +111,16 @@ class AssetUpdateRequest(BaseModel):
 class SearchRequest(BaseModel):
     """地图选数或按条件查找资产。管理列表请用 GET /assets。"""
 
-    model_config = ConfigDict(title="资产检索条件", populate_by_name=True)
+    model_config = ConfigDict(
+        title="资产检索条件",
+        populate_by_name=True,
+        json_schema_extra={"example": {"page": 1, "page_size": 20}},
+    )
 
     spatial_geojson: dict[str, Any] | None = Field(
         default=None,
         validation_alias=AliasChoices("spatial_geojson", "geometry"),
         description="检索范围。经纬度 GeoJSON 的 Polygon 或 MultiPolygon；不传则不按空间过滤",
-        examples=[_POLYGON_EXAMPLE],
     )
     asset_type: AssetType | None = Field(default=None, description="按文件种类过滤；不传则不限")
     status: AssetStatus | None = Field(

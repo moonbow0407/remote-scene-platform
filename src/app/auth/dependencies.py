@@ -19,7 +19,12 @@ from app.db import session_scope
 from app.errors import forbidden, unauthorized
 from app.settings import Settings
 
-_bearer = HTTPBearer(auto_error=False, description="登录后拿到的访问令牌")
+_bearer = HTTPBearer(
+    auto_error=False,
+    scheme_name="BearerAuth",
+    bearerFormat="JWT",
+    description="登录后获得的 access_token。请求头 Authorization: Bearer <token>",
+)
 
 
 def get_session(request: Request) -> Iterator[Session]:

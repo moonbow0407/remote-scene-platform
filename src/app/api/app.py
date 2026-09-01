@@ -30,6 +30,7 @@ from app.errors import ProblemError
 from app.jobs.router import router as jobs_router
 from app.logging import configure_logging, trace_id_var
 from app.monitoring.router import router as monitoring_router
+from app.openapi_compat import polish_openapi
 from app.settings import get_settings
 from app.tiles.router import router as tiles_router
 from app.uploads.router import router as uploads_router
@@ -223,6 +224,7 @@ def create_app() -> FastAPI:
                     responses.setdefault(
                         "401", {"description": "未认证", "content": problem_content}
                     )
+        schema = polish_openapi(schema)
         app.openapi_schema = schema
         return schema
 
