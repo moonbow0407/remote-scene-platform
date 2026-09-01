@@ -12,13 +12,16 @@ from contextlib import asynccontextmanager
 from http import HTTPStatus
 from typing import Any
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.assets.router import router as assets_router
+from app.auth.access import is_public_request
+from app.auth.bootstrap import bootstrap_admin
+from app.auth.dependencies import enforce_request_actor
 from app.auth.router import auth_router, users_router
 from app.catalogs.router import router as catalogs_router
 from app.db import create_engine, make_session_factory
@@ -79,6 +82,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     engine = create_engine(settings)
     app.state.engine = engine
     app.state.session_factory = make_session_factory(engine)
+    bootstrap_admin(app.state.session_factory, settings)
     logger.info("API 进程就绪", extra={"env": settings.env})
     try:
         yield
@@ -101,9 +105,12 @@ def create_app() -> FastAPI:
             "时间一律带时区。\n"
             "空间范围只接受经纬度（EPSG:4326）的 GeoJSON 多边形（Polygon 或 MultiPolygon）。\n"
             "大文件用返回的临时地址直传，不要把文件字节 POST 到本服务。\n"
-            "上传完成后轮询「资产详情」的 `status`，不要轮询任务接口。"
+            "上传完成后轮询「资产详情」的 `status`，不要轮询任务接口。\n"
+            "除登录、刷新、探活、文档、指标和瓦片校验外，请求必须带 "
+            "`Authorization: Bearer <access_token>`。"
         ),
         lifespan=_lifespan,
+        dependencies=[Depends(enforce_request_actor)],
         servers=[
             {"url": settings.public_base_url.rstrip("/"), "description": "当前环境 API 基地址"},
         ],
@@ -160,7 +167,15 @@ def create_app() -> FastAPI:
                 }
             ],
         )
-        components = schema.setdefault("components", {}).setdefault("schemas", {})
+        components_root = schema.setdefault("components", {})
+        components_root.setdefault("securitySchemes", {})["BearerAuth"] = {
+            "type": "http",
+            "scheme": "bearer",
+            "bearerFormat": "JWT",
+            "description": "登录后获得的 access_token",
+        }
+        schema["security"] = [{"BearerAuth": []}]
+        components = components_root.setdefault("schemas", {})
         components["ProblemDetails"] = {
             "type": "object",
             "title": "错误信息",
@@ -192,15 +207,21 @@ def create_app() -> FastAPI:
         problem_content = {
             "application/problem+json": {"schema": {"$ref": "#/components/schemas/ProblemDetails"}}
         }
-        for path_item in schema.get("paths", {}).values():
+        for path, path_item in schema.get("paths", {}).items():
             for method, operation in path_item.items():
                 if method not in {"get", "post", "put", "patch", "delete"}:
                     continue
+                if is_public_request(method.upper(), path):
+                    operation["security"] = []
                 responses = operation.setdefault("responses", {})
                 responses["422"] = {"description": "请求参数不合法", "content": problem_content}
                 responses.setdefault(
                     "500", {"description": "服务器内部错误", "content": problem_content}
                 )
+                if not is_public_request(method.upper(), path):
+                    responses.setdefault(
+                        "401", {"description": "未认证", "content": problem_content}
+                    )
         app.openapi_schema = schema
         return schema
 

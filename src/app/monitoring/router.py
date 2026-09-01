@@ -12,7 +12,8 @@ import sqlalchemy as sa
 from fastapi import APIRouter, Depends, Path, Query, Request
 from sqlalchemy.orm import Session
 
-from app.context import get_actor
+from app.auth.dependencies import require_admin
+from app.context import ActorContext
 from app.db import session_scope
 from app.monitoring.enums import PlanStatus, RunStatus
 from app.monitoring.models import MonitoringPlan, MonitoringRun, MonitoringRunInput
@@ -139,8 +140,8 @@ def create_plan(
     body: PlanCreate,
     session: Annotated[Session, Depends(_get_session)],
     service: Annotated[MonitoringService, Depends(_get_service)],
+    _admin: Annotated[ActorContext, Depends(require_admin)],
 ) -> PlanDetailResponse:
-    get_actor()
     plan = service.create_plan(body)
     views = service.describe_plans([plan])
     return _plan_detail(session, plan, views[plan.id])
@@ -157,8 +158,8 @@ def update_plan(
     body: PlanUpdate,
     session: Annotated[Session, Depends(_get_session)],
     service: Annotated[MonitoringService, Depends(_get_service)],
+    _admin: Annotated[ActorContext, Depends(require_admin)],
 ) -> PlanDetailResponse:
-    get_actor()
     plan = service.update_plan(plan_id, body)
     views = service.describe_plans([plan])
     return _plan_detail(session, plan, views[plan.id])
@@ -173,8 +174,8 @@ def update_plan(
 def delete_plan(
     plan_id: Annotated[int, Path(description="监测计划编号")],
     service: Annotated[MonitoringService, Depends(_get_service)],
+    _admin: Annotated[ActorContext, Depends(require_admin)],
 ) -> None:
-    get_actor()
     service.delete_plan(plan_id)
 
 
@@ -187,8 +188,8 @@ def delete_plan(
 def pause_plan(
     plan_id: Annotated[int, Path(description="监测计划编号")],
     service: Annotated[MonitoringService, Depends(_get_service)],
+    _admin: Annotated[ActorContext, Depends(require_admin)],
 ) -> PlanSummaryResponse:
-    get_actor()
     plan = service.pause_plan(plan_id)
     views = service.describe_plans([plan])
     return _plan_summary(plan, views[plan.id])
@@ -203,8 +204,8 @@ def pause_plan(
 def resume_plan(
     plan_id: Annotated[int, Path(description="监测计划编号")],
     service: Annotated[MonitoringService, Depends(_get_service)],
+    _admin: Annotated[ActorContext, Depends(require_admin)],
 ) -> PlanSummaryResponse:
-    get_actor()
     plan = service.resume_plan(plan_id)
     views = service.describe_plans([plan])
     return _plan_summary(plan, views[plan.id])
@@ -223,8 +224,8 @@ def resume_plan(
 def trigger_plan(
     plan_id: Annotated[int, Path(description="监测计划编号")],
     service: Annotated[MonitoringService, Depends(_get_service)],
+    _admin: Annotated[ActorContext, Depends(require_admin)],
 ) -> RunResponse:
-    get_actor()
     run = service.trigger_plan(plan_id)
     views = service.describe_runs([run])
     return _run_response(run, views[run.id])
@@ -289,8 +290,8 @@ def list_run_inputs(
 def start_run(
     run_id: Annotated[int, Path(description="这次执行的编号")],
     service: Annotated[MonitoringService, Depends(_get_service)],
+    _admin: Annotated[ActorContext, Depends(require_admin)],
 ) -> RunResponse:
-
     run = service.mark_run_started(run_id)
     views = service.describe_runs([run])
     return _run_response(run, views[run.id])
@@ -305,8 +306,8 @@ def start_run(
 def succeed_run(
     run_id: Annotated[int, Path(description="这次执行的编号")],
     service: Annotated[MonitoringService, Depends(_get_service)],
+    _admin: Annotated[ActorContext, Depends(require_admin)],
 ) -> RunResponse:
-
     run = service.mark_run_succeeded(run_id)
     views = service.describe_runs([run])
     return _run_response(run, views[run.id])
@@ -322,8 +323,8 @@ def fail_run(
     run_id: Annotated[int, Path(description="这次执行的编号")],
     body: RunTransitionRequest,
     service: Annotated[MonitoringService, Depends(_get_service)],
+    _admin: Annotated[ActorContext, Depends(require_admin)],
 ) -> RunResponse:
-
     run = service.mark_run_failed(run_id, detail=body.detail or "未提供失败诊断")
     views = service.describe_runs([run])
     return _run_response(run, views[run.id])

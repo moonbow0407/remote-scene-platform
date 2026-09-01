@@ -1,4 +1,4 @@
 """鉴权核心：用户、Argon2 密码、JWT、ActorContext 适配。
 
-本模块只提供身份基础设施。资产/上传/任务等业务权限接入属于后续独立任务。
+API 默认拒绝匿名；业务 Service 经 ActorContext 读取当前操作者。
 """

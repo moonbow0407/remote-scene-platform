@@ -26,7 +26,6 @@ from app.assets.schemas import (
 )
 from app.assets.service import AssetService
 from app.catalogs.models import Category
-from app.context import get_actor
 from app.db import session_scope
 from app.errors import validation_error
 from app.pagination import Page, PageParams
@@ -163,7 +162,6 @@ def update_asset(
     body: AssetUpdateRequest,
     service: Annotated[AssetService, Depends(_service)],
 ) -> AssetDetailResponse:
-    get_actor()
     data = body.model_dump(exclude_unset=True)
     asset = service.update_asset(
         asset_id,
@@ -189,7 +187,6 @@ def delete_asset(
     AssetLifecycleService(session).soft_delete(
         asset_id,
         retention_days=request.app.state.settings.asset_retention_days,
-        actor=get_actor(),
     )
 
 
@@ -238,7 +235,6 @@ def search(
     body: SearchRequest,
     service: Annotated[AssetService, Depends(_service)],
 ) -> Page[SearchItem]:
-    get_actor()
     try:
         geometry_wkt = (
             geojson_to_wkt(body.spatial_geojson) if body.spatial_geojson is not None else None

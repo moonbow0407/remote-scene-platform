@@ -7,7 +7,6 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Path, Request
 from sqlalchemy.orm import Session
 
-from app.context import get_actor
 from app.db import session_scope
 from app.errors import conflict
 from app.uploads.minio import MinioAdapter
@@ -57,7 +56,6 @@ def create_session(
     request: Request,
     service: Annotated[UploadService, Depends(_get_service)],
 ) -> SessionCreatedResponse:
-    get_actor()
     session, part_urls = service.create_session(
         file_name=body.file_name,
         size_bytes=body.size_bytes,

@@ -62,6 +62,11 @@ class Settings(BaseSettings):
     access_token_ttl_seconds: int = 3600
     refresh_token_ttl_seconds: int = 604800
 
+    # 启动时幂等创建首个管理员。三个都空则跳过；只填部分视为配置错误。
+    bootstrap_admin_username: str = ""
+    bootstrap_admin_email: str = ""
+    bootstrap_admin_password: str = ""
+
     # Geo Worker 临时目录（每任务独立子目录，开始前检查可用空间）
     worker_tmp_dir: str = "/data/tmp"
     # 临时空间预检：低于源文件预计占用的该倍数时任务早期失败
@@ -152,11 +157,28 @@ class Settings(BaseSettings):
             )
         return self
 
+    @property
+    def is_production(self) -> bool:
+        return self.env.lower() in {"prod", "production"}
+
     @model_validator(mode="after")
     def _validate_jwt_secret_in_production(self) -> Self:
         # 生产环境空密钥会导致所有令牌可被伪造或无法签发，必须在启动期失败
-        if self.env.lower() in {"prod", "production"} and not self.jwt_secret.strip():
+        if self.is_production and not self.jwt_secret.strip():
             raise ValueError("生产环境必须配置 APP_JWT_SECRET，禁止使用空密钥")
+        return self
+
+    @model_validator(mode="after")
+    def _validate_bootstrap_admin_triplet(self) -> Self:
+        username = self.bootstrap_admin_username.strip()
+        email = self.bootstrap_admin_email.strip()
+        password = self.bootstrap_admin_password.strip()
+        filled = (bool(username), bool(email), bool(password))
+        if any(filled) and not all(filled):
+            raise ValueError(
+                "引导管理员必须同时提供 APP_BOOTSTRAP_ADMIN_USERNAME、"
+                "APP_BOOTSTRAP_ADMIN_EMAIL 与 APP_BOOTSTRAP_ADMIN_PASSWORD"
+            )
         return self
 
 

@@ -109,7 +109,7 @@ src/app/
 ├── catalogs/   # 平铺分类
 ├── ecology/    # 生态参数与资源映射
 ├── monitoring/ # 监测计划、occurrence、执行与输入快照
-├── auth/       # JWT 用户鉴权接缝
+├── auth/       # JWT 用户鉴权（业务默认拒绝匿名）
 ├── jobs/       # Job 状态机、事件、Outbox
 ├── processing/ # 栅格/矢量/附件入库流水线与 Celery 任务
 ├── vector_features/  # PostGIS 要素与空间检索

@@ -6,9 +6,10 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Path, Query, Request
 from sqlalchemy.orm import Session
 
+from app.auth.dependencies import require_admin
 from app.catalogs.schemas import CategoryCreate, CategoryResponse, CategoryUpdate
 from app.catalogs.service import CatalogService
-from app.context import get_actor
+from app.context import ActorContext
 from app.db import session_scope
 from app.pagination import Page, PageParams
 
@@ -70,8 +71,8 @@ def get_category(
 def create_category(
     body: CategoryCreate,
     service: Annotated[CatalogService, Depends(_get_service)],
+    _admin: Annotated[ActorContext, Depends(require_admin)],
 ) -> CategoryResponse:
-    get_actor()
     return _response(service.create(body))
 
 
@@ -85,8 +86,8 @@ def update_category(
     category_id: Annotated[int, Path(description="分类编号")],
     body: CategoryUpdate,
     service: Annotated[CatalogService, Depends(_get_service)],
+    _admin: Annotated[ActorContext, Depends(require_admin)],
 ) -> CategoryResponse:
-    get_actor()
     return _response(service.update(category_id, body))
 
 
@@ -99,6 +100,6 @@ def update_category(
 def delete_category(
     category_id: Annotated[int, Path(description="分类编号")],
     service: Annotated[CatalogService, Depends(_get_service)],
+    _admin: Annotated[ActorContext, Depends(require_admin)],
 ) -> None:
-    get_actor()
     service.delete(category_id)

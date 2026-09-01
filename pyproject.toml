@@ -53,7 +53,7 @@ build-backend = "hatchling.build"
 packages = ["src/app"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests/integration"]
+testpaths = ["tests"]
 markers = [
     "integration: 需要显式提供真实基础设施的高风险边界测试",
 ]

@@ -6,7 +6,8 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Path, Query, Request
 from sqlalchemy.orm import Session
 
-from app.context import get_actor
+from app.auth.dependencies import require_admin
+from app.context import ActorContext
 from app.db import session_scope
 from app.ecology.enums import EcologicalParameterStatus
 from app.ecology.schemas import (
@@ -103,9 +104,10 @@ def get_parameter(
     response_model=EcologicalParameterResponse,
 )
 def create_parameter(
-    body: EcologicalParameterCreate, service: Annotated[EcologyService, Depends(_get_service)]
+    body: EcologicalParameterCreate,
+    service: Annotated[EcologyService, Depends(_get_service)],
+    _admin: Annotated[ActorContext, Depends(require_admin)],
 ) -> EcologicalParameterResponse:
-    get_actor()
     return _parameter_response(service.create_parameter(body))
 
 
@@ -119,8 +121,8 @@ def update_parameter(
     parameter_id: Annotated[int, Path(description="生态参数编号")],
     body: EcologicalParameterUpdate,
     service: Annotated[EcologyService, Depends(_get_service)],
+    _admin: Annotated[ActorContext, Depends(require_admin)],
 ) -> EcologicalParameterResponse:
-    get_actor()
     return _parameter_response(service.update_parameter(parameter_id, body))
 
 
@@ -133,8 +135,8 @@ def update_parameter(
 def delete_parameter(
     parameter_id: Annotated[int, Path(description="生态参数编号")],
     service: Annotated[EcologyService, Depends(_get_service)],
+    _admin: Annotated[ActorContext, Depends(require_admin)],
 ) -> None:
-    get_actor()
     service.delete_parameter(parameter_id)
 
 
@@ -168,9 +170,10 @@ def list_mappings(
     response_model=MappingBatchResponse,
 )
 def create_mappings_batch(
-    body: MappingBatchCreate, service: Annotated[EcologyService, Depends(_get_service)]
+    body: MappingBatchCreate,
+    service: Annotated[EcologyService, Depends(_get_service)],
+    _admin: Annotated[ActorContext, Depends(require_admin)],
 ) -> MappingBatchResponse:
-    get_actor()
     return service.create_mappings_batch(body)
 
 
@@ -194,9 +197,10 @@ def get_mapping(
     response_model=MappingResponse,
 )
 def create_mapping(
-    body: MappingCreate, service: Annotated[EcologyService, Depends(_get_service)]
+    body: MappingCreate,
+    service: Annotated[EcologyService, Depends(_get_service)],
+    _admin: Annotated[ActorContext, Depends(require_admin)],
 ) -> MappingResponse:
-    get_actor()
     return _mapping_response(service.create_mapping(body))
 
 
@@ -210,8 +214,8 @@ def update_mapping(
     mapping_id: Annotated[int, Path(description="对应关系编号")],
     body: MappingCreate,
     service: Annotated[EcologyService, Depends(_get_service)],
+    _admin: Annotated[ActorContext, Depends(require_admin)],
 ) -> MappingResponse:
-    get_actor()
     return _mapping_response(service.update_mapping(mapping_id, body))
 
 
@@ -224,6 +228,6 @@ def update_mapping(
 def delete_mapping(
     mapping_id: Annotated[int, Path(description="对应关系编号")],
     service: Annotated[EcologyService, Depends(_get_service)],
+    _admin: Annotated[ActorContext, Depends(require_admin)],
 ) -> None:
-    get_actor()
     service.delete_mapping(mapping_id)

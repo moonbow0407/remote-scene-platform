@@ -1,10 +1,13 @@
 """ActorContext：操作者上下文接缝。
 
-未接入鉴权的业务模块继续通过 `get_actor()` 获取匿名系统操作者。
-鉴权模块把已认证用户映射为本结构（actor_id / display_name / role），
+HTTP 请求由鉴权依赖把已认证用户绑定到 ContextVar；
+Worker / Scheduler / Cleanup 未绑定时 `get_actor()` 返回匿名系统操作者。
 业务 Service 只依赖 ActorContext，不解析 JWT 或 User ORM。
 """
 
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -30,11 +33,22 @@ class ActorContext:
 
 
 _ANONYMOUS = ActorContext(actor_id=None, display_name="anonymous-system")
+_actor_var: ContextVar[ActorContext] = ContextVar("actor", default=_ANONYMOUS)
 
 
 def get_actor() -> ActorContext:
-    """返回匿名系统操作者。真实用户身份由 auth 依赖注入，不在此解析请求。"""
-    return _ANONYMOUS
+    """当前操作者。HTTP 鉴权依赖绑定真实用户；后台进程保持匿名。"""
+    return _actor_var.get()
+
+
+@contextmanager
+def bind_actor(actor: ActorContext) -> Iterator[None]:
+    """在代码块内绑定操作者；离开时恢复原值。"""
+    token = _actor_var.set(actor)
+    try:
+        yield
+    finally:
+        _actor_var.reset(token)
 
 
 def now_utc() -> datetime:
