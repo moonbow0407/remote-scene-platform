@@ -15,5 +15,6 @@ from app.data_sources import models as _data_source_models  # noqa: F401
 from app.ecology import models as _ecology_models  # noqa: F401
 from app.imagery import models as _imagery_models  # noqa: F401
 from app.jobs import models as _jobs_models  # noqa: F401
+from app.mines import models as _mine_models  # noqa: F401
 from app.monitoring import models as _monitoring_models  # noqa: F401
 from app.uploads import models as _uploads_models  # noqa: F401

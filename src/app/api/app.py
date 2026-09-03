@@ -29,6 +29,7 @@ from app.errors import ProblemError
 from app.imagery.router import satellites_router, search_router, uavs_router
 from app.jobs.router import router as jobs_router
 from app.logging import configure_logging, trace_id_var
+from app.mines.router import router as mines_router
 from app.monitoring.router import router as monitoring_router
 from app.openapi_compat import polish_openapi
 from app.settings import get_settings
@@ -131,6 +132,7 @@ def create_app() -> FastAPI:
             {"name": "瓦片", "description": "栅格在地图上显示用的短期地址。过期后重新申请。"},
             {"name": "生态", "description": "生态参数，以及它和产品型号的对应关系。"},
             {"name": "监测", "description": "按范围和周期自动挑选已处理完成的数据并执行。"},
+            {"name": "矿山", "description": "矿山基础信息及其 EPSG:4326 空间覆盖范围。"},
         ],
         openapi_url=f"{API_V1_PREFIX}/openapi.json",
         docs_url=f"{API_V1_PREFIX}/docs",
@@ -149,6 +151,7 @@ def create_app() -> FastAPI:
     app.include_router(tiles_router, prefix=API_V1_PREFIX)
     app.include_router(ecology_router, prefix=API_V1_PREFIX)
     app.include_router(monitoring_router, prefix=API_V1_PREFIX)
+    app.include_router(mines_router, prefix=API_V1_PREFIX)
 
     def custom_openapi() -> dict[str, Any]:
         """让 OpenAPI 与实际 RFC 9457 错误媒体类型一致，避免前端按框架默认误接。"""
