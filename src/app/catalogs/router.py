@@ -33,7 +33,7 @@ def _response(row: object) -> CategoryResponse:
 @router.get(
     "",
     summary="分类列表",
-    description="平铺列表，没有上下级。",
+    description="平铺列表，没有上下级。检索筛选下拉也用这个接口，读 items。",
     response_model=Page[CategoryResponse],
 )
 def list_categories(

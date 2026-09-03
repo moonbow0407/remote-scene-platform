@@ -135,7 +135,7 @@ class SearchRequest(BaseModel):
     category_id: int | None = Field(default=None, description="按分类编号精确过滤；不传则不限")
     ecological_parameter_ids: list[int] = Field(
         default_factory=list,
-        description="按生态参数找到对应分类再过滤；空数组表示不加这条条件",
+        description="按生态参数细项 id 找到对应分类再过滤；不要传大类。空数组表示不加这条条件",
     )
     page: int = Field(default=1, ge=1, description="页码，从 1 开始")
     page_size: int = Field(

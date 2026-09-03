@@ -58,7 +58,7 @@ class PlanCreate(BaseModel):
     )
     ecological_parameter_ids: list[int] = Field(
         default_factory=list,
-        description="只选这些生态参数对应分类下的资产；空数组表示不限",
+        description="只选这些生态参数细项对应分类下的资产；不要传大类。空数组表示不限",
     )
 
     @field_validator("boundary")
@@ -148,7 +148,9 @@ class PlanSummaryResponse(BaseModel):
     schedule_expression: str = Field(description="重复表达式")
     timezone: str = Field(description="时区名称")
     category_id: int | None = Field(description="限定的分类编号；不限分类为空")
-    ecological_parameter_ids: list[int] = Field(description="限定的生态参数编号；空数组表示不限")
+    ecological_parameter_ids: list[int] = Field(
+        description="限定的生态参数细项编号；空数组表示不限"
+    )
     next_run_at: datetime | None = Field(description="下一次计划执行时间，UTC 且带时区")
     last_successful_run_at: datetime | None = Field(
         description="最近一次成功执行的时间。下次会从这之后挑选新数据"

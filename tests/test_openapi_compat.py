@@ -82,3 +82,6 @@ def test_app_openapi_is_apifox_friendly() -> None:
     security = schema["paths"]["/api/v1/assets"]["get"].get("security", schema["security"])
     assert security == [{"BearerAuth": []}]
     assert schema["paths"]["/api/v1/auth/login"]["post"]["security"] == []
+    assert "/api/v1/categories/tree" not in schema["paths"]
+    assert "get" in schema["paths"]["/api/v1/ecology/parameters/tree"]
+    assert "get" in schema["paths"]["/api/v1/ecology/majors"]
