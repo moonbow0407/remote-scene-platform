@@ -43,8 +43,6 @@ class RecordDetailResponse(RecordListItem):
     )
     crs: str | None = Field(description="文件自带的坐标系；读不到为空")
     user_crs: str | None = Field(description="人工补充的坐标系；没有补充过为空")
-    width: int | None = Field(description="栅格像素宽度；未处理完为空")
-    height: int | None = Field(description="栅格像素高度；未处理完为空")
     band_count: int | None = Field(description="栅格波段数；未处理完为空")
     bbox: BBox | None = Field(description="覆盖范围外包矩形；还没有空间信息时为空")
     spatial_geojson: dict[str, Any] | None = Field(

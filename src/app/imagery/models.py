@@ -1,7 +1,6 @@
 """卫星 / 无人机影像行：栅格字段平行，没有统一资产表。"""
 
 from datetime import datetime
-from decimal import Decimal
 from typing import Any
 
 import sqlalchemy as sa
@@ -42,14 +41,7 @@ class RasterRecordMixin:
 
     crs: Mapped[str | None] = mapped_column(sa.String(128), nullable=True)
     user_crs: Mapped[str | None] = mapped_column(sa.String(128), nullable=True)
-    width: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
-    height: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
     band_count: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
-    bands: Mapped[list[Any] | None] = mapped_column(JSONB, nullable=True)
-    resolution_x: Mapped[Decimal | None] = mapped_column(sa.Numeric(18, 10), nullable=True)
-    resolution_y: Mapped[Decimal | None] = mapped_column(sa.Numeric(18, 10), nullable=True)
-    nodata: Mapped[float | None] = mapped_column(sa.Float, nullable=True)
-    render_profile: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     footprint: Mapped[WKTElement | None] = mapped_column(
         Geometry(geometry_type="POLYGON", srid=4326), nullable=True
     )

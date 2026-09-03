@@ -30,6 +30,7 @@ from app.imagery.schemas import (
 from app.imagery.service import ImageryService
 from app.imagery.types import RECORD_LABEL, RasterRecord
 from app.pagination import Page, PageParams
+from app.processing.render_profile import infer_render_profile
 from app.query import BlankAsNone
 from app.settings import Settings
 from app.tiles.schemas import TileUrlResponse
@@ -105,8 +106,6 @@ def _detail(
         diagnostics=row.diagnostics,
         crs=row.crs,
         user_crs=row.user_crs,
-        width=row.width,
-        height=row.height,
         band_count=row.band_count,
         bbox=_bbox_of(session, row.footprint),
         spatial_geojson=_footprint_geojson(session, row.footprint),
@@ -239,26 +238,14 @@ def _register_record_routes(router: APIRouter, kind: RecordKind) -> None:
         row = service.get_required(kind, record_id)
         if row.status is not RecordStatus.READY or row.cog_object_key is None:
             raise validation_error(f"{label} {record_id} 未就绪，不能申请地图地址")
-        render_profile = row.render_profile
-        raw_bands = render_profile.get("bands") if render_profile is not None else None
-        if (
-            row.band_count is None
-            or not isinstance(raw_bands, list)
-            or not raw_bands
-            or any(
-                not isinstance(index, int)
-                or isinstance(index, bool)
-                or index < 1
-                or index > row.band_count
-                for index in raw_bands
-            )
-        ):
+        if row.band_count is None or row.band_count < 1:
             raise ProblemError(
                 status=500,
                 code="RASTER_RENDER_PROFILE_INVALID",
                 title="栅格渲染配置无效",
-                detail=f"READY {label} {record_id} 缺少合法的渲染波段配置",
+                detail=f"READY {label} {record_id} 缺少波段数，无法申请地图地址",
             )
+        band_indexes = infer_render_profile(row.band_count)["bands"]
         resource = f"s3://{settings.minio_bucket}/{row.cog_object_key}"
         token, expires_at = sign_tile_token(
             owner_ref=f"{kind.value}_{row.id}",
@@ -271,7 +258,7 @@ def _register_record_routes(router: APIRouter, kind: RecordKind) -> None:
             cog_object_key=row.cog_object_key,
             bucket=settings.minio_bucket,
             token=token,
-            band_indexes=raw_bands,
+            band_indexes=band_indexes,
         )
         return TileUrlResponse(
             kind=kind,

@@ -33,7 +33,6 @@ from app.processing.common import (
     preflight_tmp,
 )
 from app.processing.errors import DeterministicError, NeedsInputError
-from app.processing.render_profile import infer_render_profile
 from app.settings import Settings
 from app.uploads.minio import MinioAdapter
 
@@ -156,32 +155,11 @@ class RasterIngestion:
                                 reason="INVALID_CRS",
                                 detail=f"补充的 CRS {user_crs!r} 无法解析，请提供有效 EPSG 代码",
                             ) from exc
-                    profile = infer_render_profile(dataset.count)
-                    bands = []
-                    for idx in range(1, dataset.count + 1):
-                        stats = dataset.statistics(idx, approx=True)
-                        bands.append(
-                            {
-                                "index": idx,
-                                "name": dataset.descriptions[idx - 1],
-                                "dtype": dataset.dtypes[idx - 1],
-                                "min": stats.min,
-                                "max": stats.max,
-                                "mean": stats.mean,
-                            }
-                        )
                     imagery.update_fields(
                         ctx.owner_kind,
                         ctx.owner_id,
                         crs=str(effective_crs),
-                        width=dataset.width,
-                        height=dataset.height,
                         band_count=dataset.count,
-                        bands=bands,
-                        resolution_x=abs(transform.a),
-                        resolution_y=abs(transform.e),
-                        nodata=dataset.nodata,
-                        render_profile=dict(profile),
                     )
             if record.status is RecordStatus.VALIDATING:
                 imagery.set_status(record, RecordStatus.PROCESSING)

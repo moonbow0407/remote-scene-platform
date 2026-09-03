@@ -118,7 +118,7 @@ src/app/
 ├── scheduler/    # 独立 Scheduler
 ├── recovery/     # Job 租约过期恢复
 └── cleanup/      # MinIO 对象异步清理
-alembic/        # 0001–0015（0015：影像硬删除）
+alembic/        # 0001–0016（0016：去掉影像探查冗余列）
 docker/         # api/worker 镜像与 Nginx 配置
 prometheus/     # 抓取配置
 grafana/        # 自动配置的 Prometheus 数据源与运维面板
