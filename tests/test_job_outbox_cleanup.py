@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
 
@@ -268,14 +268,7 @@ def test_monitoring_missing_run_fails_job_and_acks(
         assert job.last_error["code"] == "MONITORING_RUN_GONE"
 
 
-def test_purge_asset_removes_job_and_outbox(
-    asset_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(
-        "app.monitoring.service.MonitoringService.record_has_snapshot_references",
-        lambda self, owner_kind, record_id: False,
-    )
-    now = datetime(2026, 8, 30, tzinfo=UTC)
+def test_delete_record_removes_job_and_outbox(asset_factory: sessionmaker[Session]) -> None:
     with session_scope(asset_factory) as session:
         source = DataSource(code="000114", name="哨兵二号", kind=RecordKind.SATELLITE)
         session.add(source)
@@ -301,14 +294,9 @@ def test_purge_asset_removes_job_and_outbox(
             },
         )
         record_id, job_id = record.id, job.id
-        ImageryLifecycleService(session).soft_delete(
-            RecordKind.SATELLITE, record_id, retention_days=7, now=now - timedelta(days=8)
-        )
+        ImageryLifecycleService(session).delete_record(RecordKind.SATELLITE, record_id)
 
     with session_scope(asset_factory) as session:
-        assert ImageryLifecycleService(session).purge_record(
-            RecordKind.SATELLITE, record_id, now=now
-        )
         assert session.get(SatelliteData, record_id) is None
         assert session.get(Job, job_id) is None
         assert (

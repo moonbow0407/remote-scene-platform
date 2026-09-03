@@ -43,7 +43,7 @@ class MonitoringPlan(Base, TimestampMixin):
         nullable=False,
         default=PlanStatus.ACTIVE,
         index=True,
-        comment="ACTIVE 参与调度；PAUSED 暂停（计划删除为物理删除，软删除仅用于资产）",
+        comment="ACTIVE 参与调度；PAUSED 暂停（计划删除为物理删除）",
     )
     # 边界 PostGIS 几何（EPSG:4326，统一归一化为 MULTIPOLYGON），供 ST_Intersects
     # 选择资产；spatial_index=False：计划数量级小且从不按边界反查计划

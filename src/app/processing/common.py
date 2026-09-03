@@ -37,10 +37,6 @@ class IngestionContext:
         return self.tmp_dir / "staged_crs.vrt"
 
     @property
-    def thumbnail_path(self) -> Path:
-        return self.tmp_dir / "thumbnail.png"
-
-    @property
     def unpack_dir(self) -> Path:
         return self.tmp_dir / "unpack"
 

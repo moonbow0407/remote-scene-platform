@@ -126,19 +126,6 @@ def _dedupe_preserving_order(ids: Sequence[int]) -> list[int]:
 
 
 class MonitoringService:
-    def record_has_snapshot_references(self, owner_kind: str, record_id: int) -> bool:
-        """记录是否仍被不可变监测输入快照引用；生命周期模块据此禁止物理清理。"""
-        return bool(
-            self._session.scalar(
-                sa.select(sa.func.count())
-                .select_from(MonitoringRunInput)
-                .where(
-                    MonitoringRunInput.owner_kind == owner_kind,
-                    MonitoringRunInput.record_id == record_id,
-                )
-            )
-        )
-
     def __init__(self, session: Session, dispatcher: RunDispatcher | None = None) -> None:
         self._session = session
         # 默认生产派发器：同事务创建 MONITORING_RUN Job + Outbox 事件；
@@ -269,7 +256,6 @@ class MonitoringService:
     def delete_plan(self, plan_id: int) -> None:
         """物理删除计划（关联 occurrence/Run/快照随数据库级联删除）。
 
-        软删除与 7 天恢复期仅用于资产；计划删除为物理删除。
         Job 与 Outbox 不在级联链上（monitoring_run.job_id 为 ON DELETE SET NULL，
         Outbox 无外键）：必须先按 Run 收掉，否则已投递消息会在 Worker 上因
         缺失 Run 反复失败，或租约过期后被恢复器再次投入 geo 队列。

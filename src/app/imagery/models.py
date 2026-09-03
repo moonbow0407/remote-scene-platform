@@ -15,7 +15,7 @@ from app.imagery.enums import ObjectCleanupKind, ObjectCleanupStatus, RecordStat
 
 
 class RasterRecordMixin:
-    """卫星与无人机共用的栅格与生命周期字段。"""
+    """卫星与无人机共用的栅格与处理状态字段。"""
 
     id: Mapped[int] = mapped_column(sa.Integer, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(sa.String(255), nullable=False)
@@ -39,7 +39,6 @@ class RasterRecordMixin:
 
     original_object_key: Mapped[str | None] = mapped_column(sa.String(1024), nullable=True)
     cog_object_key: Mapped[str | None] = mapped_column(sa.String(1024), nullable=True)
-    thumbnail_object_key: Mapped[str | None] = mapped_column(sa.String(1024), nullable=True)
 
     crs: Mapped[str | None] = mapped_column(sa.String(128), nullable=True)
     user_crs: Mapped[str | None] = mapped_column(sa.String(128), nullable=True)
@@ -54,20 +53,6 @@ class RasterRecordMixin:
     footprint: Mapped[WKTElement | None] = mapped_column(
         Geometry(geometry_type="POLYGON", srid=4326), nullable=True
     )
-    min_x: Mapped[float | None] = mapped_column(sa.Float, nullable=True)
-    min_y: Mapped[float | None] = mapped_column(sa.Float, nullable=True)
-    max_x: Mapped[float | None] = mapped_column(sa.Float, nullable=True)
-    max_y: Mapped[float | None] = mapped_column(sa.Float, nullable=True)
-
-    created_by: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
-    deleted_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
-    purge_after: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
-    deleted_by: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
-    purge_attempts: Mapped[int] = mapped_column(sa.Integer, nullable=False, default=0)
-    purge_next_attempt_at: Mapped[datetime | None] = mapped_column(
-        sa.DateTime(timezone=True), nullable=True
-    )
-    purge_last_error: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
 
 
 class SatelliteData(Base, TimestampMixin, RasterRecordMixin):
@@ -75,9 +60,6 @@ class SatelliteData(Base, TimestampMixin, RasterRecordMixin):
 
     __tablename__ = "satellite_data"
     __table_args__ = (
-        sa.Index(
-            "ix_satellite_data_purge_due", "deleted_at", "purge_after", "purge_next_attempt_at"
-        ),
         sa.Index("ix_satellite_data_search", "status", "acquired_at", "created_at"),
         sa.Index("ix_satellite_data_footprint", "footprint", postgresql_using="gist"),
     )
@@ -88,7 +70,6 @@ class UavData(Base, TimestampMixin, RasterRecordMixin):
 
     __tablename__ = "uav_data"
     __table_args__ = (
-        sa.Index("ix_uav_data_purge_due", "deleted_at", "purge_after", "purge_next_attempt_at"),
         sa.Index("ix_uav_data_search", "status", "acquired_at", "created_at"),
         sa.Index("ix_uav_data_footprint", "footprint", postgresql_using="gist"),
     )

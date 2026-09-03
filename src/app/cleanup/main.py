@@ -1,4 +1,4 @@
-"""过期资产与 MinIO 对象异步清理循环。"""
+"""MinIO 对象异步清理循环。"""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.context import now_utc
 from app.db import create_engine, make_session_factory, session_scope
-from app.imagery.lifecycle import ImageryLifecycleService, ObjectCleanupService
+from app.imagery.lifecycle import ObjectCleanupService
 from app.logging import configure_logging
 from app.model_registry import *  # noqa: F403 迁移/外键目标模型全部注册
 from app.settings import get_settings
@@ -38,7 +38,7 @@ def main() -> None:
     factory = make_session_factory(engine)
     minio = MinioAdapter(settings)
     logger.info(
-        "生命周期清理器已启动",
+        "对象清理器已启动",
         extra={
             "poll_seconds": settings.cleanup_poll_seconds,
             "batch_size": settings.cleanup_batch_size,
@@ -49,27 +49,6 @@ def main() -> None:
             did_work = False
             now = now_utc()
             try:
-                with session_scope(factory) as session:
-                    due = ImageryLifecycleService(session).due_records(
-                        now=now, limit=settings.cleanup_batch_size
-                    )
-                for kind, record_id in due:
-                    try:
-                        with session_scope(factory) as session:
-                            if ImageryLifecycleService(session).purge_record(
-                                kind, record_id, now=now
-                            ):
-                                did_work = True
-                    except Exception as exc:
-                        logger.exception(
-                            "过期影像清理失败，将退避重试",
-                            extra={"kind": kind.value, "record_id": str(record_id)},
-                        )
-                        with session_scope(factory) as session:
-                            ImageryLifecycleService(session).record_purge_failure(
-                                kind, record_id, str(exc), now=now
-                            )
-
                 with session_scope(factory) as session:
                     tasks = ObjectCleanupService(session, minio).claim_due(
                         now=now, limit=settings.cleanup_batch_size
@@ -84,7 +63,7 @@ def main() -> None:
                 time.sleep(settings.cleanup_poll_seconds)
     finally:
         engine.dispose()
-        logger.info("生命周期清理器已停止")
+        logger.info("对象清理器已停止")
 
 
 if __name__ == "__main__":

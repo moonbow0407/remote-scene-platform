@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 from datetime import datetime
 from typing import Any
 
@@ -10,7 +9,6 @@ import sqlalchemy as sa
 from geoalchemy2 import WKTElement
 from sqlalchemy.orm import Session
 
-from app.context import ActorContext, get_actor
 from app.data_sources.models import DataSource
 from app.data_sources.service import DataSourceService
 from app.errors import conflict, not_found, validation_error
@@ -18,8 +16,6 @@ from app.imagery.enums import RecordKind, RecordStatus
 from app.imagery.models import SatelliteData, UavData
 from app.imagery.record_state import is_record_transition_allowed
 from app.imagery.types import RECORD_LABEL, RasterRecord, record_cls
-
-logger = logging.getLogger(__name__)
 
 
 class ImageryService:
@@ -35,9 +31,7 @@ class ImageryService:
         original_file_name: str,
         size_bytes: int,
         original_object_key: str | None = None,
-        actor: ActorContext | None = None,
     ) -> RasterRecord:
-        actor = actor or get_actor()
         source = DataSourceService(self._session).get_required(data_source_id)
         if source.kind is not kind:
             raise conflict(
@@ -51,7 +45,6 @@ class ImageryService:
             original_file_name=original_file_name,
             size_bytes=size_bytes,
             original_object_key=original_object_key,
-            created_by=None if actor.actor_id is None else int(actor.actor_id),
         )
         self._session.add(row)
         self._session.flush()
@@ -75,18 +68,11 @@ class ImageryService:
         self._session.flush()
         return row
 
-    def get(
-        self, kind: RecordKind, record_id: int, *, include_deleted: bool = False
-    ) -> RasterRecord | None:
-        row = self._session.get(record_cls(kind), record_id)
-        if row is not None and row.deleted_at is not None and not include_deleted:
-            return None
-        return row
+    def get(self, kind: RecordKind, record_id: int) -> RasterRecord | None:
+        return self._session.get(record_cls(kind), record_id)
 
-    def get_required(
-        self, kind: RecordKind, record_id: int, *, include_deleted: bool = False
-    ) -> RasterRecord:
-        row = self.get(kind, record_id, include_deleted=include_deleted)
+    def get_required(self, kind: RecordKind, record_id: int) -> RasterRecord:
+        row = self.get(kind, record_id)
         if row is None:
             raise not_found(RECORD_LABEL[kind], record_id)
         return row
@@ -106,7 +92,6 @@ class ImageryService:
         name: str | None = None,
         data_source_id: int | None = None,
         status: RecordStatus | None = None,
-        include_deleted: bool = False,
         offset: int = 0,
         limit: int = 20,
     ) -> tuple[list[RasterRecord], int]:
@@ -114,10 +99,6 @@ class ImageryService:
         stmt = sa.select(model)
         count_stmt = sa.select(sa.func.count()).select_from(model)
         conditions: list[sa.ColumnElement[bool]] = []
-        if include_deleted:
-            conditions.append(model.deleted_at.is_not(None))
-        else:
-            conditions.append(model.deleted_at.is_(None))
         if name:
             conditions.append(model.name.ilike(f"%{name.strip()}%"))
         if data_source_id is not None:
@@ -263,7 +244,7 @@ class ImageryService:
         acquired_to: datetime | None,
         source_ids: list[int] | None,
     ) -> list[sa.ColumnElement[bool]]:
-        conditions: list[sa.ColumnElement[bool]] = [model.deleted_at.is_(None)]
+        conditions: list[sa.ColumnElement[bool]] = []
         if geometry_wkt is not None:
             geom = WKTElement(geometry_wkt, srid=4326)
             conditions.append(sa.func.ST_Intersects(model.footprint, geom))

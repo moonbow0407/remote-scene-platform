@@ -89,3 +89,5 @@ def test_app_openapi_is_apifox_friendly() -> None:
     assert "get" in schema["paths"]["/api/v1/data-sources"]
     assert "post" in schema["paths"]["/api/v1/data/search"]
     assert "get" in schema["paths"]["/api/v1/ecology/data-source-mappings"]
+    assert "deleted" not in params
+    assert "/api/v1/satellites/{record_id}/restore" not in schema["paths"]

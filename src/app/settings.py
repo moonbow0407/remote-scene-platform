@@ -76,8 +76,7 @@ class Settings(BaseSettings):
     worker_task_soft_timeout_seconds: int = 21600
     worker_task_hard_timeout_seconds: int = 22200
 
-    # 资产删除后 7 天内可恢复；cleanup 进程分批清理过期资产与 MinIO 对象。
-    asset_retention_days: int = 7
+    # cleanup 进程分批删除 MinIO 对象（硬删除后入队）。
     cleanup_poll_seconds: float = 5.0
     cleanup_batch_size: int = 20
 
@@ -121,7 +120,6 @@ class Settings(BaseSettings):
         "worker_concurrency",
         "worker_task_soft_timeout_seconds",
         "worker_task_hard_timeout_seconds",
-        "asset_retention_days",
         "cleanup_batch_size",
     )
     @classmethod

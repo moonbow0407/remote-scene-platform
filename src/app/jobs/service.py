@@ -166,7 +166,7 @@ class JobService:
     def delete_jobs_and_outbox(self, job_ids: list[int]) -> None:
         """删除 Job 及其 JobEvent、Outbox 事件。
 
-        计划物理删除、资产过期清理必须走这里：否则已投递或待投递消息在
+        计划或影像硬删除必须走这里：否则已投递或待投递消息在
         Worker（acks_late）上因缺失 Job 而无限重试，堵塞共享 geo 队列。
         """
         if not job_ids:

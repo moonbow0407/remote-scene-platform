@@ -87,7 +87,7 @@ WSL 原生 Worker 依赖本机已 `uv sync --all-groups` 安装的 rasterio 等�
 | dispatcher | Outbox 投递循环 | `python -m app.dispatcher.main` |
 | scheduler | 监测计划调度循环：advisory lock 互斥 + 到期扫描 + occurrence 幂等派发 + 停机补跑 | `python -m app.scheduler.main` |
 | recovery | 回收租约过期的 RUNNING Job 并经 Outbox 重投 | `python -m app.recovery.main` |
-| cleanup | 过期影像物理清理、blob 引用复核与 MinIO 退避删除 | `python -m app.cleanup.main` |
+| cleanup | 已删除影像的 MinIO 对象退避删除 | `python -m app.cleanup.main` |
 | nginx | 唯一对外入口 `:8080`；`/tiles/` fail-closed，令牌由 API 校验 | - |
 
 基础设施：PostgreSQL/PostGIS 16-3.4（本机 `127.0.0.1:55432`，避开 Windows PostgreSQL 15 的 5432）、
@@ -105,7 +105,7 @@ src/app/
 │   pagination.py（分页基元）、checks.py（就绪检查）、context.py（ActorContext）
 ├── api/          # FastAPI 应用工厂、探针、指标、trace 中间件
 ├── data_sources/ # 产品型号字典（0001xx 卫星 / 0002xx 无人机）
-├── imagery/      # 卫星/无人机分表、检索、软删除
+├── imagery/      # 卫星/无人机分表、检索、硬删除
 ├── uploads/      # MinIO Multipart 上传会话
 ├── ecology/      # 生态细项与数据源关系
 ├── monitoring/   # 监测计划、occurrence、执行与输入快照
@@ -117,8 +117,8 @@ src/app/
 ├── dispatcher/   # Outbox Dispatcher
 ├── scheduler/    # 独立 Scheduler
 ├── recovery/     # Job 租约过期恢复
-└── cleanup/      # 影像对象异步清理
-alembic/        # 0001–0014（0014：废弃资产，卫星/无人机分表）
+└── cleanup/      # MinIO 对象异步清理
+alembic/        # 0001–0015（0015：影像硬删除）
 docker/         # api/worker 镜像与 Nginx 配置
 prometheus/     # 抓取配置
 grafana/        # 自动配置的 Prometheus 数据源与运维面板

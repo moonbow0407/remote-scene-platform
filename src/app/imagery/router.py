@@ -30,7 +30,7 @@ from app.imagery.schemas import (
 from app.imagery.service import ImageryService
 from app.imagery.types import RECORD_LABEL, RasterRecord
 from app.pagination import Page, PageParams
-from app.query import BlankAsNone, blank_as_default
+from app.query import BlankAsNone
 from app.settings import Settings
 from app.tiles.schemas import TileUrlResponse
 from app.tiles.service import build_tile_url_template, sign_tile_token
@@ -52,10 +52,20 @@ def _service(session: Annotated[Session, Depends(_get_session)]) -> ImageryServi
     return ImageryService(session)
 
 
-def _bbox_of(row: RasterRecord) -> BBox | None:
-    if row.min_x is None or row.min_y is None or row.max_x is None or row.max_y is None:
+def _bbox_of(session: Session, geom: Any) -> BBox | None:
+    if geom is None:
         return None
-    return BBox(min_x=row.min_x, min_y=row.min_y, max_x=row.max_x, max_y=row.max_y)
+    xmin, ymin, xmax, ymax = session.execute(
+        sa.select(
+            sa.func.ST_XMin(geom),
+            sa.func.ST_YMin(geom),
+            sa.func.ST_XMax(geom),
+            sa.func.ST_YMax(geom),
+        )
+    ).one()
+    if xmin is None or ymin is None or xmax is None or ymax is None:
+        return None
+    return BBox(min_x=float(xmin), min_y=float(ymin), max_x=float(xmax), max_y=float(ymax))
 
 
 def _footprint_geojson(session: Session, geom: Any) -> dict[str, Any] | None:
@@ -80,7 +90,6 @@ def _list_item(
         size_bytes=row.size_bytes,
         acquired_at=row.acquired_at,
         created_at=row.created_at,
-        deleted_at=row.deleted_at,
     )
 
 
@@ -99,7 +108,7 @@ def _detail(
         width=row.width,
         height=row.height,
         band_count=row.band_count,
-        bbox=_bbox_of(row),
+        bbox=_bbox_of(session, row.footprint),
         spatial_geojson=_footprint_geojson(session, row.footprint),
         has_map=row.status is RecordStatus.READY and row.cog_object_key is not None,
         has_download=row.original_object_key is not None and row.status is RecordStatus.READY,
@@ -118,16 +127,12 @@ def _register_record_routes(router: APIRouter, kind: RecordKind) -> None:
             int | None, BlankAsNone, Query(description="产品型号编号")
         ] = None,
         status: Annotated[RecordStatus | None, BlankAsNone, Query(description="处理状态")] = None,
-        deleted: Annotated[
-            bool, blank_as_default(False), Query(description="true 只列出回收站")
-        ] = False,
     ) -> Page[RecordListItem]:
         rows, total = service.list_records(
             kind,
             name=name,
             data_source_id=data_source_id,
             status=status,
-            include_deleted=deleted,
             offset=pagination.offset,
             limit=pagination.limit,
         )
@@ -188,35 +193,9 @@ def _register_record_routes(router: APIRouter, kind: RecordKind) -> None:
     @router.delete("/{record_id}", status_code=204, summary=f"删除{label}")
     def delete_record(
         record_id: Annotated[int, Path(description="记录编号")],
-        request: Request,
         session: Annotated[Session, Depends(_get_session)],
     ) -> None:
-        ImageryLifecycleService(session).soft_delete(
-            kind,
-            record_id,
-            retention_days=request.app.state.settings.asset_retention_days,
-        )
-
-    @router.post(
-        "/{record_id}/restore",
-        summary="从回收站恢复",
-        response_model=RecordDetailResponse,
-    )
-    def restore_record(
-        record_id: Annotated[int, Path(description="记录编号")],
-        session: Annotated[Session, Depends(_get_session)],
-    ) -> RecordDetailResponse:
-        row = ImageryLifecycleService(session).restore(kind, record_id)
-        service = ImageryService(session)
-        sources = service.data_source_map([row])
-        source = sources.get(row.data_source_id)
-        return _detail(
-            session,
-            kind,
-            row,
-            None if source is None else source.code,
-            None if source is None else source.name,
-        )
+        ImageryLifecycleService(session).delete_record(kind, record_id)
 
     @router.get(
         "/{record_id}/download-url",
@@ -345,7 +324,9 @@ def search(
                 data_source_name=None if source is None else source.name,
                 status=row.status,
                 acquired_at=row.acquired_at,
-                bbox=_bbox_of(row) if body.spatial_geojson is not None else None,
+                bbox=_bbox_of(service._session, row.footprint)
+                if body.spatial_geojson is not None
+                else None,
             )
         )
     return Page[SearchItem](items=items, total=total, page=body.page, page_size=body.page_size)

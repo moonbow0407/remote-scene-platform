@@ -33,7 +33,6 @@ class RecordListItem(BaseModel):
     size_bytes: int = Field(description="原文件大小，单位字节")
     acquired_at: datetime | None = Field(description="数据采集时间，UTC 且带时区；未知为空")
     created_at: datetime = Field(description="记录创建时间，UTC 且带时区")
-    deleted_at: datetime | None = Field(default=None, description="进入回收站的时间；未删除为空")
 
 
 class RecordDetailResponse(RecordListItem):
