@@ -1,9 +1,9 @@
 """生态参数与映射服务。
 
 边界：
-- 创建映射前通过 CatalogService 校验资源目录存在（模块间经公开 Service 协作）；
-- 批量创建同事务、自动去重、已存在关系幂等返回；
-- 更新映射是对两端 UUID 外键的原子替换，不以名称/code 作为关系键。
+- 细项 code 为四位编号，大类由前两位推导；
+- 创建映射前通过 CatalogService 校验分类存在；
+- 批量创建同事务、自动去重、已存在关系幂等返回。
 """
 
 from __future__ import annotations
@@ -15,32 +15,57 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.catalogs.service import CatalogService
-from app.context import get_actor
 from app.ecology.enums import EcologicalParameterStatus
+from app.ecology.majors import MAJORS, major_code_of, resolve_major_name
 from app.ecology.models import EcologicalParameter, EcologicalParameterResourceMapping
 from app.ecology.schemas import (
     EcologicalParameterCreate,
-    EcologicalParameterTreeNode,
+    EcologicalParameterLeaf,
+    EcologicalParameterMajorNode,
     EcologicalParameterUpdate,
+    MajorResponse,
     MappingBatchCreate,
     MappingBatchResponse,
     MappingCreate,
     MappingResponse,
 )
-from app.errors import conflict, not_found, validation_error
+from app.errors import conflict, not_found
 from app.pagination import Page, PageParams
 
 logger = logging.getLogger(__name__)
 
 
-def _actor_uuid() -> int | None:
-    actor = get_actor()
-    if actor.actor_id is None:
-        return None
-    try:
-        return int(actor.actor_id)
-    except ValueError:
-        return None
+def group_parameters_by_major(
+    rows: list[EcologicalParameter],
+) -> list[EcologicalParameterMajorNode]:
+    grouped: dict[str, list[EcologicalParameter]] = {}
+    names: dict[str, str] = {}
+    for row in rows:
+        grouped.setdefault(row.major_code, []).append(row)
+        names[row.major_code] = row.major_name
+    nodes: list[EcologicalParameterMajorNode] = []
+    for major_code in sorted(grouped):
+        children = [
+            EcologicalParameterLeaf(
+                id=item.id,
+                code=item.code,
+                abbrev=item.abbrev,
+                name=item.name,
+                english_name=item.english_name,
+                status=item.status,
+                sort_order=item.sort_order,
+                remark=item.remark,
+            )
+            for item in grouped[major_code]
+        ]
+        nodes.append(
+            EcologicalParameterMajorNode(
+                major_code=major_code,
+                major_name=names[major_code],
+                children=children,
+            )
+        )
+    return nodes
 
 
 class EcologyService:
@@ -63,9 +88,9 @@ class EcologyService:
         params: PageParams,
         *,
         status: EcologicalParameterStatus | None = None,
-        parent_id: int | None = None,
         code: str | None = None,
-        root_only: bool = False,
+        abbrev: str | None = None,
+        major_code: str | None = None,
     ) -> Page[EcologicalParameter]:
         stmt = sa.select(EcologicalParameter)
         count_stmt = sa.select(sa.func.count()).select_from(EcologicalParameter)
@@ -75,42 +100,52 @@ class EcologyService:
         if code is not None:
             stmt = stmt.where(EcologicalParameter.code == code)
             count_stmt = count_stmt.where(EcologicalParameter.code == code)
-        if root_only:
-            stmt = stmt.where(EcologicalParameter.parent_id.is_(None))
-            count_stmt = count_stmt.where(EcologicalParameter.parent_id.is_(None))
-        elif parent_id is not None:
-            stmt = stmt.where(EcologicalParameter.parent_id == parent_id)
-            count_stmt = count_stmt.where(EcologicalParameter.parent_id == parent_id)
+        if abbrev is not None:
+            stmt = stmt.where(EcologicalParameter.abbrev == abbrev)
+            count_stmt = count_stmt.where(EcologicalParameter.abbrev == abbrev)
+        if major_code is not None:
+            stmt = stmt.where(EcologicalParameter.major_code == major_code)
+            count_stmt = count_stmt.where(EcologicalParameter.major_code == major_code)
         total = int(self._session.scalar(count_stmt) or 0)
         rows = list(
             self._session.scalars(
-                stmt.order_by(EcologicalParameter.sort_order, EcologicalParameter.code)
-                .offset(params.offset)
-                .limit(params.limit)
+                stmt.order_by(EcologicalParameter.code).offset(params.offset).limit(params.limit)
             )
         )
         return Page.build(rows, total, params)
 
+    def list_majors(self) -> list[MajorResponse]:
+        by_code = dict(MAJORS)
+        extras = self._session.execute(
+            sa.select(EcologicalParameter.major_code, EcologicalParameter.major_name)
+            .where(EcologicalParameter.major_code.notin_(list(MAJORS)))
+            .distinct()
+        )
+        for major_code, major_name in extras:
+            by_code.setdefault(major_code, major_name)
+        return [MajorResponse(code=code, name=name) for code, name in sorted(by_code.items())]
+
     def create_parameter(self, body: EcologicalParameterCreate) -> EcologicalParameter:
+        major_code = major_code_of(body.code)
+        major_name = resolve_major_name(major_code, body.major_name)
         self._ensure_parameter_code_unique(body.code)
-        if body.parent_id is not None:
-            self.get_parameter_required(body.parent_id)
+        self._ensure_parameter_abbrev_unique(body.abbrev)
         row = EcologicalParameter(
             code=body.code,
             name=body.name,
-            parent_id=body.parent_id,
+            abbrev=body.abbrev,
+            english_name=body.english_name,
+            major_code=major_code,
+            major_name=major_name,
+            remark=body.remark,
             status=body.status,
             sort_order=body.sort_order,
-            created_by=_actor_uuid(),
         )
         self._session.add(row)
         try:
             self._session.flush()
         except IntegrityError as exc:
-            raise conflict(
-                code="ECOLOGICAL_PARAMETER_CODE_CONFLICT",
-                detail=f"生态参数编码 {body.code} 已存在",
-            ) from exc
+            raise self._unique_conflict(exc, body.code, body.abbrev) from exc
         logger.info("创建生态参数", extra={"parameter_id": str(row.id), "code": row.code})
         return row
 
@@ -121,49 +156,34 @@ class EcologyService:
         data = body.model_dump(exclude_unset=True)
 
         if "code" in data and data["code"] != row.code:
-            # 关系以 UUID 外键维系，允许改 code，但必须保持唯一
             self._ensure_parameter_code_unique(data["code"], exclude_id=parameter_id)
             row.code = data["code"]
+            row.major_code = major_code_of(row.code)
+            row.major_name = resolve_major_name(row.major_code, data.get("major_name"))
+        elif "major_name" in data:
+            row.major_name = resolve_major_name(row.major_code, data["major_name"])
         if "name" in data:
             row.name = data["name"]
+        if "abbrev" in data and data["abbrev"] != row.abbrev:
+            self._ensure_parameter_abbrev_unique(data["abbrev"], exclude_id=parameter_id)
+            row.abbrev = data["abbrev"]
+        if "english_name" in data:
+            row.english_name = data["english_name"]
         if "status" in data:
             row.status = data["status"]
         if "sort_order" in data:
             row.sort_order = data["sort_order"]
-        if "parent_id" in data:
-            new_parent_id: int | None = data["parent_id"]
-            if new_parent_id == parameter_id:
-                raise validation_error("不能将生态参数的父节点设为自己")
-            if new_parent_id is not None:
-                self.get_parameter_required(new_parent_id)
-                if self._parameter_would_cycle(parameter_id, new_parent_id):
-                    raise conflict(
-                        code="ECOLOGICAL_PARAMETER_PARENT_CYCLE",
-                        detail="更新父节点会形成参数环，已拒绝",
-                    )
-            row.parent_id = new_parent_id
+        if "remark" in data:
+            row.remark = data["remark"]
 
         try:
             self._session.flush()
         except IntegrityError as exc:
-            raise conflict(
-                code="ECOLOGICAL_PARAMETER_CODE_CONFLICT",
-                detail=f"生态参数编码 {row.code} 已存在",
-            ) from exc
+            raise self._unique_conflict(exc, row.code, row.abbrev) from exc
         return row
 
     def delete_parameter(self, parameter_id: int) -> None:
         row = self.get_parameter_required(parameter_id)
-        child_count = self._session.scalar(
-            sa.select(sa.func.count())
-            .select_from(EcologicalParameter)
-            .where(EcologicalParameter.parent_id == parameter_id)
-        )
-        if int(child_count or 0) > 0:
-            raise conflict(
-                code="ECOLOGICAL_PARAMETER_HAS_CHILDREN",
-                detail=f"生态参数 {parameter_id} 仍有子节点，禁止删除",
-            )
         mapping_count = self._session.scalar(
             sa.select(sa.func.count())
             .select_from(EcologicalParameterResourceMapping)
@@ -185,31 +205,11 @@ class EcologyService:
 
     def parameter_tree(
         self, *, status: EcologicalParameterStatus | None = None
-    ) -> list[EcologicalParameterTreeNode]:
-        stmt = sa.select(EcologicalParameter).order_by(
-            EcologicalParameter.sort_order, EcologicalParameter.code
-        )
+    ) -> list[EcologicalParameterMajorNode]:
+        stmt = sa.select(EcologicalParameter).order_by(EcologicalParameter.code)
         if status is not None:
             stmt = stmt.where(EcologicalParameter.status == status)
-        rows = list(self._session.scalars(stmt))
-        by_parent: dict[int | None, list[EcologicalParameter]] = {}
-        for row in rows:
-            by_parent.setdefault(row.parent_id, []).append(row)
-
-        def build(parent_id: int | None) -> list[EcologicalParameterTreeNode]:
-            return [
-                EcologicalParameterTreeNode(
-                    id=item.id,
-                    code=item.code,
-                    name=item.name,
-                    status=item.status,
-                    sort_order=item.sort_order,
-                    children=build(item.id),
-                )
-                for item in by_parent.get(parent_id, [])
-            ]
-
-        return build(None)
+        return group_parameters_by_major(list(self._session.scalars(stmt)))
 
     def _ensure_parameter_code_unique(self, code: str, *, exclude_id: int | None = None) -> None:
         stmt = sa.select(EcologicalParameter.id).where(EcologicalParameter.code == code)
@@ -218,23 +218,32 @@ class EcologyService:
         if self._session.scalar(stmt) is not None:
             raise conflict(
                 code="ECOLOGICAL_PARAMETER_CODE_CONFLICT",
-                detail=f"生态参数编码 {code} 已存在",
+                detail=f"细项编号 {code} 已存在",
             )
 
-    def _parameter_would_cycle(self, node_id: int, new_parent_id: int) -> bool:
-        current: int | None = new_parent_id
-        seen: set[int] = set()
-        while current is not None:
-            if current == node_id:
-                return True
-            if current in seen:
-                return True
-            seen.add(current)
-            parent = self.get_parameter(current)
-            if parent is None:
-                return False
-            current = parent.parent_id
-        return False
+    def _ensure_parameter_abbrev_unique(
+        self, abbrev: str, *, exclude_id: int | None = None
+    ) -> None:
+        stmt = sa.select(EcologicalParameter.id).where(EcologicalParameter.abbrev == abbrev)
+        if exclude_id is not None:
+            stmt = stmt.where(EcologicalParameter.id != exclude_id)
+        if self._session.scalar(stmt) is not None:
+            raise conflict(
+                code="ECOLOGICAL_PARAMETER_ABBREV_CONFLICT",
+                detail=f"英文缩写 {abbrev} 已存在",
+            )
+
+    def _unique_conflict(self, exc: IntegrityError, code: str, abbrev: str) -> Exception:
+        message = str(getattr(exc, "orig", exc))
+        if "abbrev" in message.lower():
+            return conflict(
+                code="ECOLOGICAL_PARAMETER_ABBREV_CONFLICT",
+                detail=f"英文缩写 {abbrev} 已存在",
+            )
+        return conflict(
+            code="ECOLOGICAL_PARAMETER_CODE_CONFLICT",
+            detail=f"细项编号 {code} 已存在",
+        )
 
     # ----- Mappings -----
 

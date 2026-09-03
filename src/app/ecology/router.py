@@ -12,9 +12,10 @@ from app.db import session_scope
 from app.ecology.enums import EcologicalParameterStatus
 from app.ecology.schemas import (
     EcologicalParameterCreate,
+    EcologicalParameterMajorNode,
     EcologicalParameterResponse,
-    EcologicalParameterTreeNode,
     EcologicalParameterUpdate,
+    MajorResponse,
     MappingBatchCreate,
     MappingBatchResponse,
     MappingCreate,
@@ -22,7 +23,7 @@ from app.ecology.schemas import (
 )
 from app.ecology.service import EcologyService
 from app.pagination import Page, PageParams
-from app.query import BlankAsNone, blank_as_default
+from app.query import BlankAsNone
 
 router = APIRouter(prefix="/ecology", tags=["生态"])
 
@@ -48,9 +49,21 @@ def _mapping_response(row: object) -> MappingResponse:
 
 
 @router.get(
+    "/majors",
+    summary="生态参量大类",
+    description="内置 01–07，外加库里出现过的其它大类。给筛选和创建表单用。",
+    response_model=list[MajorResponse],
+)
+def list_majors(
+    service: Annotated[EcologyService, Depends(_get_service)],
+) -> list[MajorResponse]:
+    return service.list_majors()
+
+
+@router.get(
     "/parameters",
     summary="生态参数列表",
-    description="平铺列出生态参数，可用状态、父节点、编码过滤。",
+    description="平铺列出细项，可按启用状态、细项编号、缩写、大类过滤。",
     response_model=Page[EcologicalParameterResponse],
 )
 def list_parameters(
@@ -61,27 +74,31 @@ def list_parameters(
         BlankAsNone,
         Query(description="按是否启用过滤；不传则不限"),
     ] = None,
-    parent_id: Annotated[
-        int | None, BlankAsNone, Query(description="父参数编号；不传则不限")
-    ] = None,
     code: Annotated[
-        str | None, BlankAsNone, Query(max_length=64, description="业务编码，精确匹配")
+        str | None, BlankAsNone, Query(max_length=4, description="细项编号，精确匹配")
     ] = None,
-    root_only: Annotated[
-        bool, blank_as_default(False), Query(description="true 时只返回顶层参数")
-    ] = False,
+    abbrev: Annotated[
+        str | None, BlankAsNone, Query(max_length=64, description="英文缩写，精确匹配")
+    ] = None,
+    major_code: Annotated[
+        str | None, BlankAsNone, Query(max_length=8, description="大类编号，例如 01")
+    ] = None,
 ) -> Page[EcologicalParameterResponse]:
     page = service.list_parameters(
-        params, status=status, parent_id=parent_id, code=code, root_only=root_only
+        params, status=status, code=code, abbrev=abbrev, major_code=major_code
     )
     return Page.build([_parameter_response(item) for item in page.items], page.total, params)
 
 
+# /tree 必须注册在 /parameters/{id} 之前，否则 tree 会被当成编号。
 @router.get(
     "/parameters/tree",
     summary="生态参数树",
-    description="按父子关系嵌套返回，给树形选择器用。",
-    response_model=list[EcologicalParameterTreeNode],
+    description=(
+        "按大类分组返回细项，给检索筛选下拉用。根节点是大类，没有参数 id；"
+        "只有 children 里的细项能用于 ecological_parameter_ids。"
+    ),
+    response_model=list[EcologicalParameterMajorNode],
 )
 def parameter_tree(
     service: Annotated[EcologyService, Depends(_get_service)],
@@ -90,7 +107,7 @@ def parameter_tree(
         BlankAsNone,
         Query(description="按是否启用过滤；不传则返回全部"),
     ] = None,
-) -> list[EcologicalParameterTreeNode]:
+) -> list[EcologicalParameterMajorNode]:
     return service.parameter_tree(status=status)
 
 
@@ -110,7 +127,7 @@ def get_parameter(
     "/parameters",
     status_code=201,
     summary="创建生态参数",
-    description="编码全局不能重复。不填父参数就是顶层。",
+    description="细项编号和英文缩写都全局不能重复。大类由编号前两位决定。",
     response_model=EcologicalParameterResponse,
 )
 def create_parameter(
@@ -124,7 +141,7 @@ def create_parameter(
 @router.put(
     "/parameters/{parameter_id}",
     summary="更新生态参数",
-    description="没写的字段保持原值。parent_id 传 null 表示升到顶层。",
+    description="没写的字段保持原值。改 code 会按前两位重算大类。",
     response_model=EcologicalParameterResponse,
 )
 def update_parameter(
@@ -140,7 +157,7 @@ def update_parameter(
     "/parameters/{parameter_id}",
     status_code=204,
     summary="删除生态参数",
-    description="还有子参数，或仍有分类对应关系时，不能删除。",
+    description="仍有分类对应关系时不能删除。",
 )
 def delete_parameter(
     parameter_id: Annotated[int, Path(description="生态参数编号")],
