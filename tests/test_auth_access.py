@@ -50,7 +50,7 @@ def test_public_allowlist() -> None:
     assert is_public_request("GET", "/api/v1/docs")
     assert is_public_request("GET", "/api/v1/docs/oauth2-redirect")
     assert is_public_request("get", "/api/v1/healthz/")
-    assert not is_public_request("GET", "/api/v1/assets")
+    assert not is_public_request("GET", "/api/v1/satellites")
     assert not is_public_request("POST", "/api/v1/auth/login/extra")
     assert not is_public_request("GET", "/api/v1/auth/me")
     assert not is_public_request("POST", "/api/v1/monitoring/runs/1/succeed")

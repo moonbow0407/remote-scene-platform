@@ -5,6 +5,8 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.ecology.enums import Precision
+from app.imagery.enums import RecordKind
 from app.monitoring.enums import OccurrenceTrigger, PlanStatus, RunStatus, ScheduleType
 
 _POLYGON_EXAMPLE = {
@@ -28,7 +30,7 @@ def _validate_boundary_is_object(value: dict[str, Any]) -> dict[str, Any]:
 
 
 class PlanCreate(BaseModel):
-    """新建监测计划。到点后按范围和分类自动挑选已处理完成的数据并执行。"""
+    """新建监测计划。到点后按范围、细项和精度自动挑选已处理完成的数据并执行。"""
 
     model_config = ConfigDict(title="创建监测计划")
 
@@ -53,12 +55,12 @@ class PlanCreate(BaseModel):
         description="时区名称，例如 Asia/Shanghai，用来解释当地的执行时刻",
         examples=["Asia/Shanghai"],
     )
-    category_id: int | None = Field(
-        default=None, description="只选这个分类的资产；不传表示不限分类"
+    precision: Precision = Field(
+        default=Precision.LOW, description="选数精度 00/01。细项为空时不参与过滤"
     )
     ecological_parameter_ids: list[int] = Field(
         default_factory=list,
-        description="只选这些生态参数细项对应分类下的资产；不要传大类。空数组表示不限",
+        description="只选这些生态细项在该精度下映射到的卫星/无人机；空数组表示不限",
     )
 
     @field_validator("boundary")
@@ -84,7 +86,7 @@ class PlanCreate(BaseModel):
 
 
 class PlanUpdate(BaseModel):
-    """改监测计划。没写的字段保持原值。分类传 null 表示不再限分类。"""
+    """改监测计划。没写的字段保持原值。"""
 
     model_config = ConfigDict(title="更新监测计划")
 
@@ -101,9 +103,7 @@ class PlanUpdate(BaseModel):
     timezone: str | None = Field(
         default=None, min_length=1, max_length=64, description="新时区；不传则不改"
     )
-    category_id: int | None = Field(
-        default=None, description="分类编号；不传则不改，传 null 表示不再限分类"
-    )
+    precision: Precision | None = Field(default=None, description="选数精度；不传则不改")
     ecological_parameter_ids: list[int] | None = Field(
         default=None, description="生态参数编号列表，传入则整表替换；不传则不改"
     )
@@ -147,7 +147,7 @@ class PlanSummaryResponse(BaseModel):
     schedule_type: ScheduleType = Field(description="重复方式")
     schedule_expression: str = Field(description="重复表达式")
     timezone: str = Field(description="时区名称")
-    category_id: int | None = Field(description="限定的分类编号；不限分类为空")
+    precision: Precision = Field(description="选数精度 00/01")
     ecological_parameter_ids: list[int] = Field(
         description="限定的生态参数细项编号；空数组表示不限"
     )
@@ -185,19 +185,20 @@ class RunResponse(BaseModel):
     finished_at: datetime | None = Field(description="实际结束时间；尚未结束为空")
     diagnostics: dict[str, Any] | None = Field(description="失败或执行说明；正常时可为空")
     trigger: OccurrenceTrigger = Field(description="是到点自动执行，还是页面上手动点的")
-    input_count: int = Field(description="这次选中的资产数量")
+    input_count: int = Field(description="这次选中的影像数量")
     created_at: datetime = Field(description="记录创建时间，UTC 且带时区")
     updated_at: datetime = Field(description="最近一次修改时间，UTC 且带时区")
 
 
 class RunInputResponse(BaseModel):
-    """这次执行选中的一份资产。名单在执行创建后不能改。"""
+    """这次执行选中的一份影像。名单在执行创建后不能改。"""
 
-    model_config = ConfigDict(title="执行选用的资产")
+    model_config = ConfigDict(title="执行选用的影像")
 
     id: int = Field(description="这条记录的编号")
     run_id: int = Field(description="所属执行编号")
-    asset_id: int = Field(description="选中的资产编号")
+    owner_kind: RecordKind = Field(description="SATELLITE 或 UAV")
+    record_id: int = Field(description="选中的卫星或无人机编号")
     created_at: datetime = Field(description="写入时间，UTC 且带时区")
 
 

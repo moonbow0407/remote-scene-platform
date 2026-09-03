@@ -1,8 +1,8 @@
 # remote-scene-platform
 
-多源遥感数据共享平台后端（Python 版）。管理栅格/矢量/附件三类数据资产：
-MinIO Multipart 分片直传大文件，后台异步生成 COG 与缩略图，PostGIS 提供空间检索，
-TiTiler 提供地图瓦片；支持按范围和周期自动挑选数据的监测计划。
+多源遥感数据共享平台后端（Python 版）。卫星与无人机影像分表管理：
+MinIO Multipart 分片直传 GeoTIFF，后台异步生成 COG 与缩略图，PostGIS 提供空间检索，
+TiTiler 提供地图瓦片；支持按范围、生态细项和精度自动挑选数据的监测计划。
 
 架构是模块化单体，分进程运行：FastAPI API、Outbox Dispatcher、独立 Scheduler、
 Celery Geo Worker；PostgreSQL/PostGIS 是唯一关系与空间库（也是任务状态的权威来源），
@@ -87,7 +87,7 @@ WSL 原生 Worker 依赖本机已 `uv sync --all-groups` 安装的 rasterio 等�
 | dispatcher | Outbox 投递循环 | `python -m app.dispatcher.main` |
 | scheduler | 监测计划调度循环：advisory lock 互斥 + 到期扫描 + occurrence 幂等派发 + 停机补跑 | `python -m app.scheduler.main` |
 | recovery | 回收租约过期的 RUNNING Job 并经 Outbox 重投 | `python -m app.recovery.main` |
-| cleanup | 过期资产物理清理、blob 引用复核与 MinIO 退避删除 | `python -m app.cleanup.main` |
+| cleanup | 过期影像物理清理、blob 引用复核与 MinIO 退避删除 | `python -m app.cleanup.main` |
 | nginx | 唯一对外入口 `:8080`；`/tiles/` fail-closed，令牌由 API 校验 | - |
 
 基础设施：PostgreSQL/PostGIS 16-3.4（本机 `127.0.0.1:55432`，避开 Windows PostgreSQL 15 的 5432）、
@@ -103,23 +103,22 @@ src/app/
 ├── core 层职责当前分布在顶层：settings.py（配置）、db.py（会话/基类）、
 │   logging.py（结构化日志）、ids.py（trace/令牌用 UUID）、errors.py（RFC 9457 错误）、
 │   pagination.py（分页基元）、checks.py（就绪检查）、context.py（ActorContext）
-├── api/        # FastAPI 应用工厂、探针、指标、trace 中间件
-├── assets/     # 资产（一行一份文件）、检索、软删除
-├── uploads/    # MinIO Multipart 上传会话
-├── catalogs/   # 平铺分类
-├── ecology/    # 生态参数与资源映射
-├── monitoring/ # 监测计划、occurrence、执行与输入快照
-├── auth/       # JWT 用户鉴权（业务默认拒绝匿名）
-├── jobs/       # Job 状态机、事件、Outbox
-├── processing/ # 栅格/矢量/附件入库流水线与 Celery 任务
-├── vector_features/  # PostGIS 要素与空间检索
-├── tiles/      # 短期瓦片令牌
-├── worker/     # Celery Geo Worker
-├── dispatcher/ # Outbox Dispatcher
-├── scheduler/  # 独立 Scheduler
-├── recovery/   # Job 租约过期恢复
-└── cleanup/    # 资产/对象异步清理
-alembic/        # 0001–0011（0011：压平资产分类与授权接缝）
+├── api/          # FastAPI 应用工厂、探针、指标、trace 中间件
+├── data_sources/ # 产品型号字典（0001xx 卫星 / 0002xx 无人机）
+├── imagery/      # 卫星/无人机分表、检索、软删除
+├── uploads/      # MinIO Multipart 上传会话
+├── ecology/      # 生态细项与数据源关系
+├── monitoring/   # 监测计划、occurrence、执行与输入快照
+├── auth/         # JWT 用户鉴权（业务默认拒绝匿名）
+├── jobs/         # Job 状态机、事件、Outbox
+├── processing/   # 栅格入库流水线与 Celery 任务
+├── tiles/        # 短期瓦片令牌
+├── worker/       # Celery Geo Worker
+├── dispatcher/   # Outbox Dispatcher
+├── scheduler/    # 独立 Scheduler
+├── recovery/     # Job 租约过期恢复
+└── cleanup/      # 影像对象异步清理
+alembic/        # 0001–0014（0014：废弃资产，卫星/无人机分表）
 docker/         # api/worker 镜像与 Nginx 配置
 prometheus/     # 抓取配置
 grafana/        # 自动配置的 Prometheus 数据源与运维面板

@@ -11,3 +11,9 @@ class EcologicalParameterStatus(StrEnum):
 
     ACTIVE = "ACTIVE"
     DISABLED = "DISABLED"
+
+
+@enum_docs("反演精度", "00：低精度；01：高精度。")
+class Precision(StrEnum):
+    LOW = "00"
+    HIGH = "01"

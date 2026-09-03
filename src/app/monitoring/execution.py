@@ -27,8 +27,6 @@ from billiard.exceptions import SoftTimeLimitExceeded
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.assets.enums import AssetStatus
-from app.assets.models import DataAsset
 from app.db import create_engine, make_session_factory, session_scope
 from app.errors import ProblemError
 from app.jobs.enums import JobStatus
@@ -228,12 +226,17 @@ def _verify_snapshot(session: Session, run: MonitoringRun) -> list[str]:
     """
     problems: list[str] = []
     for row in run.inputs:
-        asset = session.get(DataAsset, row.asset_id)
-        if asset is None:
-            problems.append(f"输入资产 {row.asset_id} 不存在")
+        from app.imagery.enums import RecordKind, RecordStatus
+        from app.imagery.service import ImageryService
+
+        record = ImageryService(session).get_by_id(RecordKind(row.owner_kind), row.record_id)
+        if record is None:
+            problems.append(f"输入 {row.owner_kind} {row.record_id} 不存在")
             continue
-        if asset.status is not AssetStatus.READY:
-            problems.append(f"输入资产 {row.asset_id} 状态为 {asset.status.value}，要求 READY")
+        if record.status is not RecordStatus.READY:
+            problems.append(
+                f"输入 {row.owner_kind} {row.record_id} 状态为 {record.status.value}，要求 READY"
+            )
     return problems
 
 

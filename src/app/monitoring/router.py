@@ -50,7 +50,7 @@ def _plan_summary(plan: MonitoringPlan, view: PlanView) -> PlanSummaryResponse:
         schedule_type=plan.schedule_type,
         schedule_expression=plan.schedule_expression,
         timezone=plan.timezone,
-        category_id=plan.category_id,
+        precision=plan.precision,
         ecological_parameter_ids=view.ecological_parameter_ids,
         next_run_at=plan.next_run_at,
         last_successful_run_at=plan.last_successful_run_at,

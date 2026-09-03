@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from app.imagery.enums import RecordKind
 from app.settings import Settings
 
 logger = logging.getLogger(__name__)
@@ -16,7 +17,8 @@ logger = logging.getLogger(__name__)
 @dataclass
 class IngestionContext:
     job_id: int
-    asset_id: int
+    owner_kind: RecordKind
+    owner_id: int
     source_object_key: str
     source_size_bytes: int
     tmp_dir: Path

@@ -30,7 +30,7 @@ class JobResponse(BaseModel):
     status: JobStatus = Field(description="当前状态")
     attempt: int = Field(description="已经尝试的次数，第一次为 0")
     max_attempts: int = Field(description="最多尝试几次")
-    payload: dict[str, Any] = Field(description="任务参数。入库任务里会有 asset_id")
+    payload: dict[str, Any] = Field(description="任务参数。入库任务里会有 owner_kind / owner_id")
     last_error: dict[str, Any] | None = Field(description="最近一次失败说明；成功时为空")
     queued_at: datetime | None = Field(description="进入队列的时间；尚未排队为空")
     started_at: datetime | None = Field(description="开始执行的时间；尚未开始为空")

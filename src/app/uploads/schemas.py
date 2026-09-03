@@ -4,7 +4,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.assets.enums import AssetType
+from app.imagery.enums import RecordKind
 from app.uploads.models import UploadSessionStatus
 
 
@@ -16,17 +16,15 @@ class CreateSessionRequest(BaseModel):
     file_name: str = Field(
         min_length=1,
         max_length=512,
-        description="原始文件名，必须带扩展名。用扩展名判断文件种类",
+        description="原始文件名，必须带 .tif / .tiff 扩展名",
         examples=["GF1_PMS_20240101.tif"],
     )
     size_bytes: int = Field(gt=0, description="文件总大小，单位字节", examples=[104857600])
     content_type: str | None = Field(
         default=None, max_length=128, description="文件 MIME 类型，可不传"
     )
-    asset_type: AssetType | None = Field(
-        default=None,
-        description="文件种类。不传则按扩展名判断：tif 栅格，zip/geojson/gpkg/shp 矢量，其余附件",
-    )
+    kind: RecordKind = Field(description="SATELLITE 卫星影像，或 UAV 无人机影像")
+    data_source_id: int = Field(description="产品型号编号，必须与 kind 匹配")
 
 
 class PartUrl(BaseModel):
@@ -44,7 +42,8 @@ class SessionCreatedResponse(BaseModel):
     model_config = ConfigDict(title="上传已创建")
 
     session_id: int = Field(description="本次上传编号")
-    asset_id: int = Field(description="对应的资产编号。传完后用它请求「资产详情」看处理进度")
+    kind: RecordKind = Field(description="SATELLITE 或 UAV")
+    record_id: int = Field(description="对应的卫星或无人机编号。传完后用它查详情看处理进度")
     part_urls: list[PartUrl] = Field(description="每一片的临时 PUT 地址")
     expires_in_seconds: int = Field(description="这些上传地址的有效时间，单位秒")
 
@@ -65,7 +64,8 @@ class SessionDetailResponse(BaseModel):
     model_config = ConfigDict(title="上传详情")
 
     session_id: int = Field(description="本次上传编号")
-    asset_id: int = Field(description="对应的资产编号")
+    kind: RecordKind = Field(description="SATELLITE 或 UAV")
+    record_id: int = Field(description="对应的卫星或无人机编号")
     status: UploadSessionStatus = Field(description="上传状态")
     file_name: str = Field(description="原始文件名")
     size_bytes: int = Field(description="文件总大小，单位字节")
@@ -78,7 +78,8 @@ class SessionDetailResponse(BaseModel):
         uploaded_numbers = {p.part_number for p in uploaded_parts}
         return cls(
             session_id=session.id,
-            asset_id=session.asset_id,
+            kind=session.owner_kind,
+            record_id=session.owner_id,
             status=session.status,
             file_name=session.file_name,
             size_bytes=session.size_bytes,
@@ -101,16 +102,17 @@ class PartUrlResponse(BaseModel):
 
 
 class SessionCompletedResponse(BaseModel):
-    """分片已合并，后台开始处理。接下来轮询 GET /assets/{asset_id}。"""
+    """分片已合并，后台开始处理。接下来轮询卫星或无人机详情。"""
 
     model_config = ConfigDict(title="上传完成")
 
     session_id: int = Field(description="本次上传编号")
-    asset_id: int = Field(description="资产编号，用它查询处理进度")
+    kind: RecordKind = Field(description="SATELLITE 或 UAV")
+    record_id: int = Field(description="记录编号，用它查询处理进度")
 
 
 class SessionAbortResponse(BaseModel):
-    """这次上传已取消，对应资产会记为失败。"""
+    """这次上传已取消，对应记录会记为失败。"""
 
     model_config = ConfigDict(title="上传已中止")
 

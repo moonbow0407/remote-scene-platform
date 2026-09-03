@@ -18,15 +18,15 @@ from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app.assets.router import router as assets_router
 from app.auth.access import is_public_request
 from app.auth.bootstrap import bootstrap_admin
 from app.auth.dependencies import enforce_request_actor
 from app.auth.router import auth_router, users_router
-from app.catalogs.router import router as catalogs_router
+from app.data_sources.router import router as data_sources_router
 from app.db import create_engine, make_session_factory
 from app.ecology.router import router as ecology_router
 from app.errors import ProblemError
+from app.imagery.router import satellites_router, search_router, uavs_router
 from app.jobs.router import router as jobs_router
 from app.logging import configure_logging, trace_id_var
 from app.monitoring.router import router as monitoring_router
@@ -34,7 +34,6 @@ from app.openapi_compat import polish_openapi
 from app.settings import get_settings
 from app.tiles.router import router as tiles_router
 from app.uploads.router import router as uploads_router
-from app.vector_features.router import router as features_router
 
 from .health import router as ops_router
 from .middleware import TraceAccessMiddleware
@@ -107,7 +106,7 @@ def create_app() -> FastAPI:
             "时间一律带时区。\n"
             "空间范围只接受经纬度（EPSG:4326）的 GeoJSON 多边形（Polygon 或 MultiPolygon）。\n"
             "大文件用返回的临时地址直传，不要把文件字节 POST 到本服务。\n"
-            "上传完成后轮询「资产详情」的 `status`，不要轮询任务接口。\n"
+            "上传完成后轮询卫星或无人机详情的 `status`，不要轮询任务接口。\n"
             "除登录、刷新、探活、文档、指标和瓦片校验外，请求必须带 "
             "`Authorization: Bearer <access_token>`。"
         ),
@@ -122,17 +121,15 @@ def create_app() -> FastAPI:
             {"name": "用户", "description": "管理员创建账号、改资料、停用账号。"},
             {
                 "name": "上传",
-                "description": "大文件分片直传。创建会话 → PUT 各分片 → 完成上传 → 轮询资产详情。",
+                "description": "大文件分片直传。创建会话后直传分片，再轮询卫星或无人机详情。",
             },
-            {
-                "name": "资产",
-                "description": "一份上传文件及其处理状态。管理列表用 GET /assets；地图选数用检索。",
-            },
-            {"name": "任务", "description": "后台处理进度。管理页面请看资产状态，不必调这里。"},
+            {"name": "数据源", "description": "产品型号字典，例如 000114 哨兵二号。"},
+            {"name": "卫星", "description": "卫星影像记录及其处理状态。"},
+            {"name": "无人机", "description": "无人机影像记录及其处理状态。"},
+            {"name": "检索", "description": "地图选数：同时检索卫星和无人机。"},
+            {"name": "任务", "description": "后台处理进度。管理页面请看影像状态，不必调这里。"},
             {"name": "瓦片", "description": "栅格在地图上显示用的短期地址。过期后重新申请。"},
-            {"name": "矢量要素", "description": "在一份矢量资产里按多边形查要素。"},
-            {"name": "分类", "description": "平铺分类，例如卫星影像、无人机影像。没有上下级。"},
-            {"name": "生态", "description": "生态参数，以及它和分类的对应关系。"},
+            {"name": "生态", "description": "生态参数，以及它和产品型号的对应关系。"},
             {"name": "监测", "description": "按范围和周期自动挑选已处理完成的数据并执行。"},
         ],
         openapi_url=f"{API_V1_PREFIX}/openapi.json",
@@ -143,12 +140,13 @@ def create_app() -> FastAPI:
     app.include_router(ops_router, prefix=API_V1_PREFIX)
     app.include_router(auth_router, prefix=API_V1_PREFIX)
     app.include_router(users_router, prefix=API_V1_PREFIX)
-    app.include_router(assets_router, prefix=API_V1_PREFIX)
     app.include_router(uploads_router, prefix=API_V1_PREFIX)
+    app.include_router(data_sources_router, prefix=API_V1_PREFIX)
+    app.include_router(satellites_router, prefix=API_V1_PREFIX)
+    app.include_router(uavs_router, prefix=API_V1_PREFIX)
+    app.include_router(search_router, prefix=API_V1_PREFIX)
     app.include_router(jobs_router, prefix=API_V1_PREFIX)
     app.include_router(tiles_router, prefix=API_V1_PREFIX)
-    app.include_router(features_router, prefix=API_V1_PREFIX)
-    app.include_router(catalogs_router, prefix=API_V1_PREFIX)
     app.include_router(ecology_router, prefix=API_V1_PREFIX)
     app.include_router(monitoring_router, prefix=API_V1_PREFIX)
 

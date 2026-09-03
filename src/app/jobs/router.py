@@ -8,8 +8,9 @@ import sqlalchemy as sa
 from fastapi import APIRouter, Depends, Path, Request
 from sqlalchemy.orm import Session
 
-from app.assets.service import AssetService
 from app.db import session_scope
+from app.imagery.enums import RecordKind
+from app.imagery.service import ImageryService
 from app.jobs.enums import JobStatus
 from app.jobs.models import JobEvent
 from app.jobs.schemas import CancelJobResponse, JobEventItem, JobResponse
@@ -28,7 +29,7 @@ def _get_session(request: Request) -> Iterator[Session]:
 @router.get(
     "/{job_id}",
     summary="查询任务",
-    description="查看后台处理进度。管理页面请轮询「资产详情」的 status，不必用本接口。",
+    description="查看后台处理进度。管理页面请轮询卫星/无人机详情的 status，不必用本接口。",
     response_model=JobResponse,
 )
 def get_job(
@@ -83,6 +84,7 @@ def cancel_job(
 
     jobs = JobService(session)
     job = jobs.request_cancel(jobs.get_required(job_id))
-    if job.asset_id is not None and job.status is JobStatus.CANCELLED:
-        AssetService(session).mark_cancelled(job.asset_id)
+    cancelled = job.status is JobStatus.CANCELLED
+    if job.owner_kind is not None and job.owner_id is not None and cancelled:
+        ImageryService(session).mark_cancelled(RecordKind(job.owner_kind), job.owner_id)
     return CancelJobResponse(job_id=job.id, status=job.status)

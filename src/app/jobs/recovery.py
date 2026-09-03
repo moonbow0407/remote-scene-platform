@@ -90,19 +90,21 @@ def recover_expired_leases(session: Session, *, batch_size: int = 50) -> list[in
 
 def _fail_related_version_if_possible(session: Session, job: Job) -> None:
     """重试耗尽时同步终止关联资产版本的伪运行状态；非入库任务或状态不允许时跳过。"""
-    asset_id = job.payload.get("asset_id")
-    if asset_id is None:
+    owner_kind = job.payload.get("owner_kind") or job.owner_kind
+    owner_id = job.payload.get("owner_id") or job.owner_id
+    if owner_kind is None or owner_id is None:
         return
-    from app.assets.asset_state import is_asset_transition_allowed
-    from app.assets.enums import AssetStatus
-    from app.assets.service import AssetService
+    from app.imagery.enums import RecordKind, RecordStatus
+    from app.imagery.record_state import is_record_transition_allowed
+    from app.imagery.service import ImageryService
 
-    asset = AssetService(session).get_asset_by_id(int(asset_id))
-    if asset is None or not is_asset_transition_allowed(asset.status, AssetStatus.FAILED):
+    imagery = ImageryService(session)
+    row = imagery.get_by_id(RecordKind(str(owner_kind)), int(owner_id))
+    if row is None or not is_record_transition_allowed(row.status, RecordStatus.FAILED):
         return
-    AssetService(session).set_status(
-        asset,
-        AssetStatus.FAILED,
+    imagery.set_status(
+        row,
+        RecordStatus.FAILED,
         diagnostics={
             "reason": "LEASE_LOST_EXHAUSTED",
             "detail": f"任务 {job.id} 执行租约过期且重试次数耗尽",

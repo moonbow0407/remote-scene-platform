@@ -17,26 +17,17 @@ from app.schema_docs import enum_docs
 @enum_docs(
     "任务种类",
     "RASTER_INGESTION：栅格入库；"
-    "VECTOR_INGESTION：矢量入库；"
-    "ATTACHMENT_INGESTION：附件入库；"
     "MONITORING_RUN：监测执行。",
 )
 class JobType(StrEnum):
     """任务种类。"""
 
     RASTER_INGESTION = "RASTER_INGESTION"
-    VECTOR_INGESTION = "VECTOR_INGESTION"
-    ATTACHMENT_INGESTION = "ATTACHMENT_INGESTION"
-    # 监测执行：无单版本引用（多版本输入快照见 monitoring_run_input），
-    # 由监测模块经 RunDispatcher 接缝同事务创建，Geo Worker 中的
-    # monitoring.execute_run 任务认领执行
     MONITORING_RUN = "MONITORING_RUN"
 
 
 TASK_BY_JOB_TYPE: dict[JobType, str] = {
     JobType.RASTER_INGESTION: "processing.ingest_raster",
-    JobType.VECTOR_INGESTION: "processing.ingest_vector",
-    JobType.ATTACHMENT_INGESTION: "processing.ingest_attachment",
     JobType.MONITORING_RUN: "monitoring.execute_run",
 }
 
@@ -47,7 +38,7 @@ TASK_BY_JOB_TYPE: dict[JobType, str] = {
     "QUEUED：已排队；"
     "RUNNING：正在执行；"
     "RETRYING：出错后等待重试；"
-    "NEEDS_INPUT：缺坐标系，请去资产上补充；"
+    "NEEDS_INPUT：缺坐标系，请去卫星/无人机记录上补充；"
     "SUCCEEDED：成功；"
     "FAILED：失败；"
     "CANCEL_REQUESTED：已请求取消，还在收尾；"

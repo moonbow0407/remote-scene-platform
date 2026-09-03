@@ -21,9 +21,10 @@ from rasterio.errors import NotGeoreferencedWarning
 from rasterio.shutil import copy as rio_copy
 from rasterio.transform import Affine
 
-from app.assets.enums import AssetStatus
-from app.assets.service import AssetService
 from app.db import session_scope
+from app.imagery.enums import RecordStatus
+from app.imagery.service import ImageryService
+from app.imagery.types import object_prefix
 from app.jobs.enums import JobStatus
 from app.jobs.service import JobService
 from app.processing.blob import bind_original, ensure_source_local, resolve_input_object
@@ -114,7 +115,7 @@ class RasterIngestion:
     def _step_validate(self, ctx: IngestionContext) -> None:
         """校验输入对象存在、大小一致且为 TIFF；非 TIFF 属确定性错误。
 
-        输入对象按 resolve_input_object 解析：原件键在资产行上。
+        输入对象按 resolve_input_object 解析：原件键在记录行上。
         """
         key, expected_size = resolve_input_object(engine=self._engine, ctx=ctx)
         stat = self._minio.head_object(key=key)
@@ -153,10 +154,10 @@ class RasterIngestion:
         """
         ensure_source_local(minio=self._minio, engine=self._engine, ctx=ctx)
         with session_scope(self._engine) as session:
-            assets = AssetService(session)
-            asset = assets.get_asset_by_id(ctx.asset_id)
-            assert asset is not None
-            user_crs = asset.user_crs
+            imagery = ImageryService(session)
+            record = imagery.get_by_id(ctx.owner_kind, ctx.owner_id)
+            assert record is not None
+            user_crs = record.user_crs
             with warnings.catch_warnings():
                 # 无地理参考时 rasterio 返回单位阵并告警；此处以单位阵作为判定依据，告警无意义
                 warnings.simplefilter("ignore", NotGeoreferencedWarning)
@@ -200,8 +201,9 @@ class RasterIngestion:
                                 "mean": stats.mean,
                             }
                         )
-                    assets.update_fields(
-                        ctx.asset_id,
+                    imagery.update_fields(
+                        ctx.owner_kind,
+                        ctx.owner_id,
                         crs=str(effective_crs),
                         width=dataset.width,
                         height=dataset.height,
@@ -212,8 +214,8 @@ class RasterIngestion:
                         nodata=dataset.nodata,
                         render_profile=dict(profile),
                     )
-            if asset.status is AssetStatus.VALIDATING:
-                assets.set_status(asset, AssetStatus.PROCESSING)
+            if record.status is RecordStatus.VALIDATING:
+                imagery.set_status(record, RecordStatus.PROCESSING)
         self._record_step(ctx, "inspect")
 
     def _step_create_cog(self, ctx: IngestionContext) -> None:
@@ -224,17 +226,17 @@ class RasterIngestion:
         指派到轻量 VRT 中间层（仅元数据、不复制像素），再一次性生成最终 COG。
         """
         with session_scope(self._engine) as session:
-            assets = AssetService(session)
-            asset = assets.get_asset_by_id(ctx.asset_id)
-            assert asset is not None
+            imagery = ImageryService(session)
+            record = imagery.get_by_id(ctx.owner_kind, ctx.owner_id)
+            assert record is not None
             if (
-                asset.cog_object_key is not None
-                and self._minio.head_object(key=asset.cog_object_key) is not None
+                record.cog_object_key is not None
+                and self._minio.head_object(key=record.cog_object_key) is not None
             ):
-                logger.info("COG 已存在，跳过", extra={"asset_id": str(ctx.asset_id)})
+                logger.info("COG 已存在，跳过", extra={"owner_id": str(ctx.owner_id)})
                 self._record_step(ctx, "create_cog")
                 return
-            user_crs = asset.user_crs
+            user_crs = record.user_crs
 
         ensure_source_local(minio=self._minio, engine=self._engine, ctx=ctx)
         cog_tmp = ctx.cog_path
@@ -250,29 +252,31 @@ class RasterIngestion:
             rio_copy(
                 str(ctx.source_path), str(cog_tmp), driver="COG", compress="DEFLATE", blocksize=512
             )
-        cog_key = f"assets/{ctx.asset_id}/cog.tif"
+        cog_key = f"{object_prefix(ctx.owner_kind, ctx.owner_id)}/cog.tif"
         content_type = "image/tiff; profile=cloud-optimized"
         self._minio.upload_file(local_path=str(cog_tmp), key=cog_key, content_type=content_type)
         with session_scope(self._engine) as session:
-            AssetService(session).update_fields(ctx.asset_id, cog_object_key=cog_key)
+            ImageryService(session).update_fields(
+                ctx.owner_kind, ctx.owner_id, cog_object_key=cog_key
+            )
         self._record_step(ctx, "create_cog")
 
     def _step_thumbnail(self, ctx: IngestionContext) -> None:
         """按渲染推断生成 PNG 缩略图（重采样 + 逐波段线性拉伸）。"""
         with session_scope(self._engine) as session:
-            assets = AssetService(session)
-            asset = assets.get_asset_by_id(ctx.asset_id)
-            assert asset is not None
+            imagery = ImageryService(session)
+            record = imagery.get_by_id(ctx.owner_kind, ctx.owner_id)
+            assert record is not None
             if (
-                asset.thumbnail_object_key is not None
-                and self._minio.head_object(key=asset.thumbnail_object_key) is not None
+                record.thumbnail_object_key is not None
+                and self._minio.head_object(key=record.thumbnail_object_key) is not None
             ):
                 self._record_step(ctx, "thumbnail")
                 return
-            if asset.render_profile is None:
+            if record.render_profile is None:
                 raise TransientError("RENDER_PROFILE_MISSING")
-            profile = dict(asset.render_profile)
-            nodata = asset.nodata
+            profile = dict(record.render_profile)
+            nodata = record.nodata
 
         self._ensure_cog_local(ctx)
         bands = [int(b) for b in profile["bands"]]
@@ -305,22 +309,24 @@ class RasterIngestion:
                 ) as dst:
                     for i in range(count):
                         dst.write(out_bands[i], i + 1)
-        thumb_key = f"assets/{ctx.asset_id}/thumbnail.png"
+        thumb_key = f"{object_prefix(ctx.owner_kind, ctx.owner_id)}/thumbnail.png"
         self._minio.upload_file(local_path=str(thumbnail), key=thumb_key, content_type="image/png")
         with session_scope(self._engine) as session:
-            AssetService(session).update_fields(ctx.asset_id, thumbnail_object_key=thumb_key)
+            ImageryService(session).update_fields(
+                ctx.owner_kind, ctx.owner_id, thumbnail_object_key=thumb_key
+            )
         self._record_step(ctx, "thumbnail")
 
     def _step_footprint(self, ctx: IngestionContext) -> None:
         """计算 EPSG:4326 footprint（bbox 多边形）与结构化 bbox 列。"""
         with session_scope(self._engine) as session:
-            assets = AssetService(session)
-            asset = assets.get_asset_by_id(ctx.asset_id)
-            assert asset is not None
-            if asset.footprint is not None or asset.crs is None:
+            imagery = ImageryService(session)
+            record = imagery.get_by_id(ctx.owner_kind, ctx.owner_id)
+            assert record is not None
+            if record.footprint is not None or record.crs is None:
                 self._record_step(ctx, "footprint")
                 return
-            crs_text = asset.crs
+            crs_text = record.crs
         ensure_source_local(minio=self._minio, engine=self._engine, ctx=ctx)
         with rasterio.open(ctx.source_path) as src:
             bounds = src.bounds
@@ -333,9 +339,10 @@ class RasterIngestion:
             f"{max_x!r} {max_y!r}, {min_x!r} {max_y!r}, {min_x!r} {min_y!r}))"
         )
         with session_scope(self._engine) as session:
-            assets = AssetService(session)
-            assets.update_fields(
-                ctx.asset_id,
+            imagery = ImageryService(session)
+            imagery.update_fields(
+                ctx.owner_kind,
+                ctx.owner_id,
                 footprint=WKTElement(wkt, srid=4326),
                 min_x=min_x,
                 min_y=min_y,
@@ -346,14 +353,14 @@ class RasterIngestion:
 
     def _step_finalize(self, ctx: IngestionContext) -> None:
         with session_scope(self._engine) as session:
-            assets = AssetService(session)
+            imagery = ImageryService(session)
             jobs = JobService(session)
-            asset = assets.get_asset_by_id(ctx.asset_id)
-            assert asset is not None
-            if asset.cog_object_key is None or asset.thumbnail_object_key is None:
+            record = imagery.get_by_id(ctx.owner_kind, ctx.owner_id)
+            assert record is not None
+            if record.cog_object_key is None or record.thumbnail_object_key is None:
                 raise DeterministicError("ARTIFACTS_MISSING", "完成前缺少 COG 或缩略图")
-            if asset.status is not AssetStatus.READY:
-                assets.set_status(asset, AssetStatus.READY)
+            if record.status is not RecordStatus.READY:
+                imagery.set_status(record, RecordStatus.READY)
             job = jobs.get(ctx.job_id)
             if job is not None and job.status is not JobStatus.SUCCEEDED:
                 jobs.transition(job, JobStatus.SUCCEEDED, event_type="JOB_SUCCEEDED")
@@ -362,10 +369,10 @@ class RasterIngestion:
 
     def _ensure_cog_local(self, ctx: IngestionContext) -> Path:
         with session_scope(self._engine) as session:
-            assets = AssetService(session)
-            asset = assets.get_asset_by_id(ctx.asset_id)
-            assert asset is not None and asset.cog_object_key is not None
-            key = asset.cog_object_key
+            imagery = ImageryService(session)
+            record = imagery.get_by_id(ctx.owner_kind, ctx.owner_id)
+            assert record is not None and record.cog_object_key is not None
+            key = record.cog_object_key
             expected_size = None
         if expected_size is not None and _is_complete_local_file(ctx.cog_path, expected_size):
             return ctx.cog_path

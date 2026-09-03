@@ -1,11 +1,4 @@
-"""资产持久化：一行资产即一份文件，派生对象键与空间字段同表。
-
-不变量：
-- 每次上传创建一条新资产，没有版本；传错则软删除后重传；
-- Job 与监测快照引用 data_asset.id；
-- 原件/COG/缩略图以对象键列存放，同一文件传两次在 MinIO 存两份；
-- 栅格 COG 保留原始 CRS；检索 footprint 为 EPSG:4326。
-"""
+"""卫星 / 无人机影像行：栅格字段平行，没有统一资产表。"""
 
 from datetime import datetime
 from decimal import Decimal
@@ -17,36 +10,27 @@ from sqlalchemy import ForeignKey
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.assets.enums import AssetStatus, AssetType, ObjectCleanupKind, ObjectCleanupStatus
 from app.db import Base, TimestampMixin
+from app.imagery.enums import ObjectCleanupKind, ObjectCleanupStatus, RecordStatus
 
 
-class DataAsset(Base, TimestampMixin):
-    """一份上传数据：状态、分类、原件/派生对象与类型扩展字段。"""
-
-    __tablename__ = "data_asset"
+class RasterRecordMixin:
+    """卫星与无人机共用的栅格与生命周期字段。"""
 
     id: Mapped[int] = mapped_column(sa.Integer, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(sa.String(255), nullable=False)
-    asset_type: Mapped[AssetType] = mapped_column(
-        sa.Enum(AssetType, native_enum=False, length=16),
-        nullable=False,
-        index=True,
-        comment="物理类型：RASTER/VECTOR/ATTACHMENT",
-    )
-    status: Mapped[AssetStatus] = mapped_column(
-        sa.Enum(AssetStatus, native_enum=False, length=16),
-        nullable=False,
-        default=AssetStatus.UPLOADING,
-        index=True,
-        comment="UPLOADING/VALIDATING/PROCESSING/NEEDS_INPUT/READY/FAILED",
-    )
-    category_id: Mapped[int | None] = mapped_column(
+    data_source_id: Mapped[int] = mapped_column(
         sa.Integer,
-        ForeignKey("category.id", ondelete="RESTRICT"),
-        nullable=True,
+        ForeignKey("data_source.id", ondelete="RESTRICT"),
+        nullable=False,
         index=True,
-        comment="平铺分类；空表示未归类",
+        comment="产品型号",
+    )
+    status: Mapped[RecordStatus] = mapped_column(
+        sa.Enum(RecordStatus, native_enum=False, length=16),
+        nullable=False,
+        default=RecordStatus.UPLOADING,
+        index=True,
     )
     acquired_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
     original_file_name: Mapped[str] = mapped_column(sa.String(512), nullable=False)
@@ -75,15 +59,6 @@ class DataAsset(Base, TimestampMixin):
     max_x: Mapped[float | None] = mapped_column(sa.Float, nullable=True)
     max_y: Mapped[float | None] = mapped_column(sa.Float, nullable=True)
 
-    geometry_type: Mapped[str | None] = mapped_column(sa.String(32), nullable=True)
-    feature_count: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
-    native_format: Mapped[str | None] = mapped_column(sa.String(32), nullable=True)
-    vector_property_schema: Mapped[list[Any] | None] = mapped_column(JSONB, nullable=True)
-
-    mime_type: Mapped[str | None] = mapped_column(sa.String(128), nullable=True)
-    detected_format: Mapped[str | None] = mapped_column(sa.String(32), nullable=True)
-
-    owner_id: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
     created_by: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
     deleted_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
     purge_after: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
@@ -94,10 +69,28 @@ class DataAsset(Base, TimestampMixin):
     )
     purge_last_error: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
 
+
+class SatelliteData(Base, TimestampMixin, RasterRecordMixin):
+    """一景卫星影像。"""
+
+    __tablename__ = "satellite_data"
     __table_args__ = (
-        sa.Index("ix_data_asset_purge_due", "deleted_at", "purge_after", "purge_next_attempt_at"),
-        sa.Index("ix_data_asset_search", "status", "acquired_at", "created_at"),
-        sa.Index("ix_data_asset_footprint", "footprint", postgresql_using="gist"),
+        sa.Index(
+            "ix_satellite_data_purge_due", "deleted_at", "purge_after", "purge_next_attempt_at"
+        ),
+        sa.Index("ix_satellite_data_search", "status", "acquired_at", "created_at"),
+        sa.Index("ix_satellite_data_footprint", "footprint", postgresql_using="gist"),
+    )
+
+
+class UavData(Base, TimestampMixin, RasterRecordMixin):
+    """一景无人机影像。"""
+
+    __tablename__ = "uav_data"
+    __table_args__ = (
+        sa.Index("ix_uav_data_purge_due", "deleted_at", "purge_after", "purge_next_attempt_at"),
+        sa.Index("ix_uav_data_search", "status", "acquired_at", "created_at"),
+        sa.Index("ix_uav_data_footprint", "footprint", postgresql_using="gist"),
     )
 
 

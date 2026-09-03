@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from app.auth.dependencies import require_admin
 from app.context import ActorContext
 from app.db import session_scope
-from app.ecology.enums import EcologicalParameterStatus
+from app.ecology.enums import EcologicalParameterStatus, Precision
 from app.ecology.schemas import (
     EcologicalParameterCreate,
     EcologicalParameterMajorNode,
@@ -96,7 +96,7 @@ def list_parameters(
     summary="生态参数树",
     description=(
         "按大类分组返回细项，给检索筛选下拉用。根节点是大类，没有参数 id；"
-        "只有 children 里的细项能用于 ecological_parameter_ids。"
+        "只有 children 里的细项能用于 ecological_parameter_ids，再经数据源关系选卫星/无人机。"
     ),
     response_model=list[EcologicalParameterMajorNode],
 )
@@ -171,9 +171,9 @@ def delete_parameter(
 
 
 @router.get(
-    "/mappings",
-    summary="生态映射列表",
-    description="生态参数和分类的对应关系。",
+    "/data-source-mappings",
+    summary="参量数据源关系列表",
+    description="生态细项、产品型号和精度的对应关系。",
     response_model=Page[MappingResponse],
 )
 def list_mappings(
@@ -182,20 +182,24 @@ def list_mappings(
     ecological_parameter_id: Annotated[
         int | None, BlankAsNone, Query(description="按生态参数编号过滤")
     ] = None,
-    category_id: Annotated[int | None, BlankAsNone, Query(description="按分类编号过滤")] = None,
+    data_source_id: Annotated[
+        int | None, BlankAsNone, Query(description="按数据源编号过滤")
+    ] = None,
+    precision: Annotated[Precision | None, BlankAsNone, Query(description="按精度过滤")] = None,
 ) -> Page[MappingResponse]:
     page = service.list_mappings(
         params,
         ecological_parameter_id=ecological_parameter_id,
-        category_id=category_id,
+        data_source_id=data_source_id,
+        precision=precision,
     )
     return Page.build([_mapping_response(item) for item in page.items], page.total, params)
 
 
 @router.post(
-    "/mappings/batch",
-    summary="批量创建生态映射",
-    description="一次提交多条。已经存在的对应关系不会报错，会在 existing 里原样返回。",
+    "/data-source-mappings/batch",
+    summary="批量创建参量数据源关系",
+    description="一次提交多条。已经存在的关系不会报错，会在 existing 里原样返回。",
     response_model=MappingBatchResponse,
 )
 def create_mappings_batch(
@@ -207,8 +211,8 @@ def create_mappings_batch(
 
 
 @router.get(
-    "/mappings/{mapping_id}",
-    summary="生态映射详情",
+    "/data-source-mappings/{mapping_id}",
+    summary="参量数据源关系详情",
     response_model=MappingResponse,
 )
 def get_mapping(
@@ -219,10 +223,10 @@ def get_mapping(
 
 
 @router.post(
-    "/mappings",
+    "/data-source-mappings",
     status_code=201,
-    summary="创建生态映射",
-    description="把一个生态参数对应到一个分类。已经存在时返回原记录，不报错。",
+    summary="创建参量数据源关系",
+    description="把一个生态细项对应到一个产品型号和精度。已经存在时返回原记录，不报错。",
     response_model=MappingResponse,
 )
 def create_mapping(
@@ -234,9 +238,9 @@ def create_mapping(
 
 
 @router.put(
-    "/mappings/{mapping_id}",
-    summary="更新生态映射",
-    description="改这条对应关系所指向的生态参数或分类。",
+    "/data-source-mappings/{mapping_id}",
+    summary="更新参量数据源关系",
+    description="改这条关系所指向的细项、数据源或精度。",
     response_model=MappingResponse,
 )
 def update_mapping(
@@ -249,10 +253,10 @@ def update_mapping(
 
 
 @router.delete(
-    "/mappings/{mapping_id}",
+    "/data-source-mappings/{mapping_id}",
     status_code=204,
-    summary="删除生态映射",
-    description="只删除这条对应关系，不删除生态参数或分类本身。",
+    summary="删除参量数据源关系",
+    description="只删除这条关系，不删除细项或数据源本身。",
 )
 def delete_mapping(
     mapping_id: Annotated[int, Path(description="对应关系编号")],

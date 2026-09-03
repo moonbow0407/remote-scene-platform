@@ -20,7 +20,7 @@ from app.jobs.enums import JobStatus, JobType, OutboxStatus
 
 
 class Job(Base, TimestampMixin):
-    """处理任务。入库任务引用具体 data_asset。"""
+    """处理任务。入库任务引用卫星或无人机记录。"""
 
     __tablename__ = "job"
 
@@ -28,7 +28,7 @@ class Job(Base, TimestampMixin):
     job_type: Mapped[JobType] = mapped_column(
         sa.Enum(JobType, native_enum=False, length=32),
         nullable=False,
-        comment="任务类型：RASTER_INGESTION/VECTOR_INGESTION/ATTACHMENT_INGESTION",
+        comment="任务类型：RASTER_INGESTION/MONITORING_RUN",
     )
     status: Mapped[JobStatus] = mapped_column(
         sa.Enum(JobStatus, native_enum=False, length=32),
@@ -40,15 +40,16 @@ class Job(Base, TimestampMixin):
             "CANCEL_REQUESTED/CANCELLED/MISSED"
         ),
     )
-    # 业务参数：asset_id、upload_session_id 等
+    # 业务参数：owner_kind、owner_id、upload_session_id 等
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     attempt: Mapped[int] = mapped_column(sa.SmallInteger, nullable=False, default=0)
     max_attempts: Mapped[int] = mapped_column(sa.SmallInteger, nullable=False, default=4)
-    # 最近一次错误的诊断（确定性/瞬时/缺输入），JSON 结构：{code, detail, transient}
     last_error: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
-    # 入库任务指向具体资产；MONITORING_RUN 为 NULL，权威关联在 monitoring_run_input
-    asset_id: Mapped[int | None] = mapped_column(
-        sa.Integer, ForeignKey("data_asset.id", ondelete="CASCADE"), nullable=True, index=True
+    owner_kind: Mapped[str | None] = mapped_column(
+        sa.String(16), nullable=True, comment="SATELLITE/UAV；MONITORING_RUN 为空"
+    )
+    owner_id: Mapped[int | None] = mapped_column(
+        sa.Integer, nullable=True, index=True, comment="卫星或无人机主键；MONITORING_RUN 为空"
     )
     queued_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)

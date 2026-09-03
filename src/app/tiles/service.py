@@ -26,9 +26,9 @@ class TileTokenError(ProblemError):
 
 
 def sign_tile_token(
-    *, asset_id: str, resource: str, ttl_seconds: int, secret: str
+    *, owner_ref: str, resource: str, ttl_seconds: int, secret: str
 ) -> tuple[str, int]:
-    """签发绑定资产、短期有效的瓦片令牌；返回 (token, 过期Unix秒)。"""
+    """签发绑定记录、短期有效的瓦片令牌；返回 (token, 过期Unix秒)。"""
     if not secret:
         raise ProblemError(
             status=503,
@@ -37,7 +37,7 @@ def sign_tile_token(
             detail="缺少 APP_TILE_TOKEN_SECRET 配置，拒绝签发瓦片令牌",
         )
     expires_at = int(now_utc().timestamp()) + ttl_seconds
-    payload = f"{_TOKEN_PREFIX}.{asset_id}.{expires_at}"
+    payload = f"{_TOKEN_PREFIX}.{owner_ref}.{expires_at}"
     signature = hmac.new(
         secret.encode(), f"{payload}.{resource}".encode(), hashlib.sha256
     ).hexdigest()[:32]
@@ -45,23 +45,23 @@ def sign_tile_token(
 
 
 def verify_tile_token(token: str, *, resource: str, secret: str) -> str:
-    """校验令牌签名与有效期，返回绑定的 asset_version_id；失败抛 401。"""
+    """校验令牌签名与有效期，返回绑定的 owner_ref；失败抛 401。"""
     parts = token.split(".")
     if len(parts) != 4 or parts[0] != _TOKEN_PREFIX:
         raise TileTokenError("令牌格式不合法")
-    _, asset_id, expires_raw, signature = parts
+    _, owner_ref, expires_raw, signature = parts
     if not secret:
         raise TileTokenError("服务端未配置瓦片令牌密钥", status=503)
     expected = hmac.new(
         secret.encode(),
-        f"{_TOKEN_PREFIX}.{asset_id}.{expires_raw}.{resource}".encode(),
+        f"{_TOKEN_PREFIX}.{owner_ref}.{expires_raw}.{resource}".encode(),
         hashlib.sha256,
     ).hexdigest()[:32]
     if not hmac.compare_digest(signature, expected):
         raise TileTokenError("令牌签名不匹配")
     if int(expires_raw) < int(time.time()):
         raise TileTokenError("令牌已过期")
-    return asset_id
+    return owner_ref
 
 
 def extract_token_from_uri(uri: str) -> str:

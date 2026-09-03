@@ -6,8 +6,8 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from app.assets.service import AssetService
 from app.db import session_scope
+from app.imagery.service import ImageryService
 from app.jobs.service import JobService
 from app.processing.common import (
     IngestionContext,
@@ -22,23 +22,25 @@ logger = logging.getLogger(__name__)
 def bind_original(*, minio: MinioAdapter, engine: Any, ctx: IngestionContext) -> None:
     """确认上传对象存在，并写入 original_object_key。"""
     with session_scope(engine) as session:
-        assets = AssetService(session)
-        asset = assets.get_asset_by_id(ctx.asset_id)
-        if asset is None:
-            raise DeterministicError("ASSET_MISSING", f"资产不存在：{ctx.asset_id}")
-        key = asset.original_object_key or ctx.source_object_key
+        imagery = ImageryService(session)
+        record = imagery.get_by_id(ctx.owner_kind, ctx.owner_id)
+        if record is None:
+            raise DeterministicError(
+                "RECORD_MISSING", f"记录不存在：{ctx.owner_kind} {ctx.owner_id}"
+            )
+        key = record.original_object_key or ctx.source_object_key
         if minio.head_object(key=key) is None:
             raise DeterministicError("SOURCE_OBJECT_MISSING", f"原件对象不存在：{key}")
-        if asset.original_object_key != key:
-            assets.update_fields(ctx.asset_id, original_object_key=key)
+        if record.original_object_key != key:
+            imagery.update_fields(ctx.owner_kind, ctx.owner_id, original_object_key=key)
     _record_step(engine, ctx, "bind_original")
 
 
 def resolve_input_object(*, engine: Any, ctx: IngestionContext) -> tuple[str, int]:
     with session_scope(engine) as session:
-        asset = AssetService(session).get_asset_by_id(ctx.asset_id)
-        if asset is not None and asset.original_object_key:
-            return asset.original_object_key, int(asset.size_bytes)
+        record = ImageryService(session).get_by_id(ctx.owner_kind, ctx.owner_id)
+        if record is not None and record.original_object_key:
+            return record.original_object_key, int(record.size_bytes)
     return ctx.source_object_key, ctx.source_size_bytes
 
 

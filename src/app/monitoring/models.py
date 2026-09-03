@@ -32,7 +32,7 @@ from app.monitoring.enums import (
 
 
 class MonitoringPlan(Base, TimestampMixin):
-    """监测计划：一个空间范围 + 资源目录约束 + 生态参数约束 + 调度周期。"""
+    """监测计划：一个空间范围 + 生态参数约束 + 调度周期。"""
 
     __tablename__ = "monitoring_plan"
 
@@ -65,11 +65,11 @@ class MonitoringPlan(Base, TimestampMixin):
     schedule_expression: Mapped[str] = mapped_column(sa.String(256), nullable=False)
     # IANA 时区名（如 Asia/Shanghai）；RRULE 的时刻在此时区生成后转 UTC
     timezone: Mapped[str] = mapped_column(sa.String(64), nullable=False)
-    category_id: Mapped[int | None] = mapped_column(
-        sa.Integer,
-        ForeignKey("category.id", ondelete="RESTRICT"),
-        nullable=True,
-        comment="分类约束；空表示不限",
+    precision: Mapped[str] = mapped_column(
+        sa.String(8),
+        nullable=False,
+        default="00",
+        comment="选数精度 00/01；细项为空时不参与过滤",
     )
     # 下一次计划触发时刻（UTC 网格点）；PAUSED 保留旧值但不参与调度，
     # RRULE 周期耗尽为 NULL（计划自然停摆）
@@ -213,7 +213,7 @@ class MonitoringRun(Base, TimestampMixin):
 
 
 class MonitoringRunInput(Base):
-    """输入快照明细：Run 引用的具体资产集合，创建后不可变。"""
+    """输入快照明细：Run 引用的卫星/无人机集合，创建后不可变。"""
 
     __tablename__ = "monitoring_run_input"
 
@@ -224,12 +224,8 @@ class MonitoringRunInput(Base):
         nullable=False,
         comment="所属监测执行",
     )
-    asset_id: Mapped[int] = mapped_column(
-        sa.Integer,
-        ForeignKey("data_asset.id", ondelete="RESTRICT"),
-        nullable=False,
-        comment="冻结的资产主键；Run 创建后不可变",
-    )
+    owner_kind: Mapped[str] = mapped_column(sa.String(16), nullable=False, comment="SATELLITE/UAV")
+    record_id: Mapped[int] = mapped_column(sa.Integer, nullable=False, comment="冻结的记录主键")
     created_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
     )
@@ -237,6 +233,8 @@ class MonitoringRunInput(Base):
     run: Mapped[MonitoringRun] = relationship(back_populates="inputs")
 
     __table_args__ = (
-        UniqueConstraint("run_id", "asset_id", name="uq_monitoring_run_input_asset"),
+        UniqueConstraint(
+            "run_id", "owner_kind", "record_id", name="uq_monitoring_run_input_record"
+        ),
         sa.Index("ix_monitoring_run_input_run", "run_id"),
     )

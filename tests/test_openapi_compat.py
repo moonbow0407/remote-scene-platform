@@ -9,12 +9,12 @@ def test_collapse_optional_enum_and_int() -> None:
             "openapi": "3.1.0",
             "components": {"securitySchemes": {"HTTPBearer": {"type": "http", "scheme": "bearer"}}},
             "paths": {
-                "/api/v1/assets": {
+                "/api/v1/satellites": {
                     "get": {
                         "security": [{"HTTPBearer": []}],
                         "parameters": [
                             {
-                                "name": "category_id",
+                                "name": "data_source_id",
                                 "in": "query",
                                 "required": False,
                                 "schema": {
@@ -48,12 +48,12 @@ def test_collapse_optional_enum_and_int() -> None:
     assert polished["openapi"] == "3.0.3"
     assert "HTTPBearer" not in polished["components"]["securitySchemes"]
     assert polished["components"]["securitySchemes"]["BearerAuth"]["scheme"] == "bearer"
-    operation = polished["paths"]["/api/v1/assets"]["get"]
+    operation = polished["paths"]["/api/v1/satellites"]["get"]
     params = {item["name"]: item for item in operation["parameters"]}
-    assert params["category_id"]["allowEmptyValue"] is True
-    assert params["category_id"]["schema"]["type"] == "integer"
-    assert params["category_id"]["schema"]["nullable"] is True
-    assert "anyOf" not in params["category_id"]["schema"]
+    assert params["data_source_id"]["allowEmptyValue"] is True
+    assert params["data_source_id"]["schema"]["type"] == "integer"
+    assert params["data_source_id"]["schema"]["nullable"] is True
+    assert "anyOf" not in params["data_source_id"]["schema"]
     assert params["status"]["schema"]["allOf"] == [{"$ref": "#/components/schemas/AssetStatus"}]
     assert params["status"]["schema"]["nullable"] is True
     assert params["page"]["schema"]["minimum"] == 1
@@ -70,18 +70,22 @@ def test_app_openapi_is_apifox_friendly() -> None:
     schema = create_app().openapi()
     assert schema["openapi"].startswith("3.0")
     assert "HTTPBearer" not in schema["components"]["securitySchemes"]
-    params = {item["name"]: item for item in schema["paths"]["/api/v1/assets"]["get"]["parameters"]}
-    assert "anyOf" not in params["category_id"]["schema"]
-    assert params["category_id"]["allowEmptyValue"] is True
-    assert params["asset_type"]["schema"]["nullable"] is True
+    params = {
+        item["name"]: item for item in schema["paths"]["/api/v1/satellites"]["get"]["parameters"]
+    }
+    assert "anyOf" not in params["data_source_id"]["schema"]
+    assert params["data_source_id"]["allowEmptyValue"] is True
+    assert params["status"]["schema"]["nullable"] is True
     search = schema["components"]["schemas"]["SearchRequest"]
     spatial = search["properties"]["spatial_geojson"]
     assert spatial.get("example") is None
-    assert spatial.get("examples") is None
-    assert search.get("example") == {"page": 1, "page_size": 20} or search.get("examples") is None
-    security = schema["paths"]["/api/v1/assets"]["get"].get("security", schema["security"])
+    assert "/api/v1/assets" not in schema["paths"]
+    assert "/api/v1/categories" not in schema["paths"]
+    security = schema["paths"]["/api/v1/satellites"]["get"].get("security", schema["security"])
     assert security == [{"BearerAuth": []}]
     assert schema["paths"]["/api/v1/auth/login"]["post"]["security"] == []
-    assert "/api/v1/categories/tree" not in schema["paths"]
     assert "get" in schema["paths"]["/api/v1/ecology/parameters/tree"]
     assert "get" in schema["paths"]["/api/v1/ecology/majors"]
+    assert "get" in schema["paths"]["/api/v1/data-sources"]
+    assert "post" in schema["paths"]["/api/v1/data/search"]
+    assert "get" in schema["paths"]["/api/v1/ecology/data-source-mappings"]

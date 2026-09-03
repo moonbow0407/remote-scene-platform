@@ -4,7 +4,6 @@ from datetime import datetime
 from enum import StrEnum
 
 import sqlalchemy as sa
-from sqlalchemy import ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base, TimestampMixin
@@ -24,14 +23,13 @@ class UploadSessionStatus(StrEnum):
 
 
 class UploadSession(Base, TimestampMixin):
-    """MinIO Multipart 上传会话。一个会话对应一条新资产。"""
+    """MinIO Multipart 上传会话。一个会话对应一条卫星或无人机记录。"""
 
     __tablename__ = "upload_session"
 
     id: Mapped[int] = mapped_column(sa.Integer, primary_key=True, autoincrement=True)
-    asset_id: Mapped[int] = mapped_column(
-        ForeignKey("data_asset.id", ondelete="CASCADE"), nullable=False, index=True
-    )
+    owner_kind: Mapped[str] = mapped_column(sa.String(16), nullable=False, comment="SATELLITE/UAV")
+    owner_id: Mapped[int] = mapped_column(sa.Integer, nullable=False, index=True)
     status: Mapped[UploadSessionStatus] = mapped_column(
         sa.Enum(UploadSessionStatus, native_enum=False, length=16),
         nullable=False,

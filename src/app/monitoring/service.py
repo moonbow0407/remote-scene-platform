@@ -24,11 +24,10 @@ from geoalchemy2 import WKTElement
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.assets.geometry import GeometryValidationError, geojson_to_wkt
-from app.catalogs.service import CatalogService
 from app.context import ActorContext, get_actor, now_utc
 from app.ecology.service import EcologyService
 from app.errors import ProblemError, conflict, not_found, validation_error
+from app.imagery.geometry import GeometryValidationError, geojson_to_wkt
 from app.jobs.service import JobService
 from app.monitoring.dispatch import JobRunDispatcher
 from app.monitoring.enums import (
@@ -46,7 +45,7 @@ from app.monitoring.models import (
 )
 from app.monitoring.scheduling import Schedule, ScheduleScanLimitExceeded, parse_schedule
 from app.monitoring.schemas import PlanCreate, PlanUpdate
-from app.monitoring.selection import SelectionCriteria, select_ready_assets
+from app.monitoring.selection import SelectionCriteria, select_ready_records
 from app.pagination import Page, PageParams
 
 logger = logging.getLogger(__name__)
@@ -127,13 +126,16 @@ def _dedupe_preserving_order(ids: Sequence[int]) -> list[int]:
 
 
 class MonitoringService:
-    def asset_has_snapshot_references(self, asset_id: int) -> bool:
-        """资产是否仍被不可变监测输入快照引用；生命周期模块据此禁止物理清理。"""
+    def record_has_snapshot_references(self, owner_kind: str, record_id: int) -> bool:
+        """记录是否仍被不可变监测输入快照引用；生命周期模块据此禁止物理清理。"""
         return bool(
             self._session.scalar(
                 sa.select(sa.func.count())
                 .select_from(MonitoringRunInput)
-                .where(MonitoringRunInput.asset_id == asset_id)
+                .where(
+                    MonitoringRunInput.owner_kind == owner_kind,
+                    MonitoringRunInput.record_id == record_id,
+                )
             )
         )
 
@@ -148,8 +150,6 @@ class MonitoringService:
     def create_plan(self, body: PlanCreate, *, actor: ActorContext | None = None) -> MonitoringPlan:
         boundary, boundary_wkt = self._normalize_boundary(body.boundary)
         schedule = parse_schedule(body.schedule_type, body.schedule_expression, body.timezone)
-        if body.category_id is not None:
-            CatalogService(self._session).get_required(body.category_id)
         parameter_ids = _dedupe_preserving_order(body.ecological_parameter_ids)
         ecology = EcologyService(self._session)
         for parameter_id in parameter_ids:
@@ -165,7 +165,7 @@ class MonitoringService:
             schedule_type=body.schedule_type,
             schedule_expression=body.schedule_expression,
             timezone=body.timezone,
-            category_id=body.category_id,
+            precision=body.precision.value,
             created_by=None if operator.actor_id is None else int(operator.actor_id),
         )
         # 首个 occurrence：以创建时刻锚定新网格，不立即触发
@@ -225,12 +225,8 @@ class MonitoringService:
             plan.timezone = data.get("timezone", plan.timezone)
             now = now_utc()
             plan.next_run_at = schedule.next_after(now, anchor=now)
-        if "category_id" in data:
-            if data["category_id"] is None:
-                plan.category_id = None
-            else:
-                CatalogService(self._session).get_required(data["category_id"])
-                plan.category_id = data["category_id"]
+        if "precision" in data and data["precision"] is not None:
+            plan.precision = data["precision"].value
         if "ecological_parameter_ids" in data:
             parameter_ids = _dedupe_preserving_order(data["ecological_parameter_ids"] or [])
             ecology = EcologyService(self._session)
@@ -603,11 +599,11 @@ class MonitoringService:
         """创建执行并冻结输入快照（occurrence 已存在，二者同事务提交）。"""
         criteria = SelectionCriteria(
             boundary_wkt=plan.boundary_wkt,
-            category_id=plan.category_id,
+            precision=plan.precision,
             ecological_parameter_ids=tuple(row.ecological_parameter_id for row in plan.parameters),
             window_anchor=self._last_successful_anchor(plan.id),
         )
-        versions = select_ready_assets(self._session, criteria)
+        selected = select_ready_records(self._session, criteria)
         run = MonitoringRun(
             plan_id=plan.id,
             occurrence_id=occurrence.id,
@@ -618,15 +614,18 @@ class MonitoringService:
         )
         self._session.add(run)
         self._session.flush()
-        for asset in versions:
+        for item in selected:
             self._session.add(
                 MonitoringRunInput(
                     run_id=run.id,
-                    asset_id=asset.id,
+                    owner_kind=item.kind.value,
+                    record_id=item.record.id,
                 )
             )
         self._session.flush()
-        run.job_id = self._dispatcher.dispatch(self._session, run, [asset.id for asset in versions])
+        run.job_id = self._dispatcher.dispatch(
+            self._session, run, [item.record.id for item in selected]
+        )
         logger.info(
             "监测执行已创建并冻结输入快照",
             extra={
@@ -634,7 +633,7 @@ class MonitoringService:
                 "plan_id": str(plan.id),
                 "occurrence_id": str(occurrence.id),
                 "scheduled_for": occurrence.scheduled_for.isoformat(),
-                "input_count": len(versions),
+                "input_count": len(selected),
             },
         )
         return run

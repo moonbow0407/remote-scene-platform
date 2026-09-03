@@ -51,27 +51,26 @@ class JobService:
         *,
         job_type: JobType,
         payload: dict[str, Any],
-        asset_id: int | None = None,
+        owner_kind: str | None = None,
+        owner_id: int | None = None,
         max_attempts: int = 4,
     ) -> tuple[Job, OutboxEvent]:
         """创建 Job 并同事务生成 Outbox 事件（由调用方的事务提交）。
 
-        幂等语义：Job 创建与投递解耦；重复调用会创建重复 Job，
-        调用方（上传完成）以唯一会话状态保证只调用一次。
-        asset_id 仅入库任务必填；MONITORING_RUN 为多资产输入快照，
-        权威关联在 monitoring_run_input。
+        入库任务必须带 owner_kind/owner_id；MONITORING_RUN 的输入在 monitoring_run_input。
         """
-        if asset_id is None and job_type is not JobType.MONITORING_RUN:
+        if job_type is not JobType.MONITORING_RUN and (owner_kind is None or owner_id is None):
             raise ValueError(
-                f"任务类型 {job_type.value} 必须引用具体 asset_id；"
-                "仅 MONITORING_RUN 允许无单资产引用"
+                f"任务类型 {job_type.value} 必须引用卫星或无人机记录；"
+                "仅 MONITORING_RUN 允许无单条记录引用"
             )
         job = Job(
             job_type=job_type,
             status=JobStatus.PENDING,
             payload=payload,
             max_attempts=max_attempts,
-            asset_id=asset_id,
+            owner_kind=owner_kind,
+            owner_id=owner_id,
         )
         self._session.add(job)
         self._session.flush()
@@ -117,14 +116,12 @@ class JobService:
             return True
         return job.status is JobStatus.CANCELLED
 
-    def request_cancel_for_assets(self, asset_ids: list[int]) -> list[int]:
-        """资产软删除时取消关联的非终态入库任务。"""
-        if not asset_ids:
-            return []
+    def request_cancel_for_owner(self, owner_kind: str, owner_id: int) -> list[int]:
         jobs = list(
             self._session.scalars(
                 sa.select(Job).where(
-                    Job.asset_id.in_(asset_ids),
+                    Job.owner_kind == owner_kind,
+                    Job.owner_id == owner_id,
                     Job.status.in_(
                         (
                             JobStatus.PENDING,
@@ -142,15 +139,14 @@ class JobService:
             self.request_cancel(job)
         return [job.id for job in jobs]
 
-    def has_active_for_assets(self, asset_ids: list[int]) -> bool:
-        if not asset_ids:
-            return False
+    def has_active_for_owner(self, owner_kind: str, owner_id: int) -> bool:
         return bool(
             self._session.scalar(
                 sa.select(sa.func.count())
                 .select_from(Job)
                 .where(
-                    Job.asset_id.in_(asset_ids),
+                    Job.owner_kind == owner_kind,
+                    Job.owner_id == owner_id,
                     Job.status.in_((JobStatus.RUNNING, JobStatus.CANCEL_REQUESTED)),
                 )
             )
@@ -180,12 +176,11 @@ class JobService:
         self._session.execute(sa.delete(Job).where(Job.id.in_(job_ids)))
         self._session.flush()
 
-    def delete_jobs_and_outbox_for_assets(self, asset_ids: list[int]) -> None:
-        """按资产引用删除入库任务及其 Outbox（须在删除 data_asset 行之前调用）。"""
-        if not asset_ids:
-            return
+    def delete_jobs_and_outbox_for_owner(self, owner_kind: str, owner_id: int) -> None:
         job_ids = list(
-            self._session.scalars(sa.select(Job.id).where(Job.asset_id.in_(asset_ids)))
+            self._session.scalars(
+                sa.select(Job.id).where(Job.owner_kind == owner_kind, Job.owner_id == owner_id)
+            )
         )
         self.delete_jobs_and_outbox(job_ids)
 

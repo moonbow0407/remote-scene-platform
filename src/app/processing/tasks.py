@@ -1,11 +1,11 @@
-"""Celery 任务定义：栅格 / 矢量 / 附件入库。
+"""Celery 任务定义：栅格入库。
 
 重试分类（架构不变量）：
 - TransientError/基础设施异常 → Job RETRYING，重投事件与状态转换同事务写入
   Transactional Outbox，由 Dispatcher 按指数退避重新投递（禁止 Celery self.retry：
   PostgreSQL 与 RabbitMQ 双写无法原子，发布失败会留下 RETRYING 但永远没有消息的死窗口）；
-- DeterministicError → Job FAILED + 资产 FAILED + 诊断落库，不自动重试；
-- NeedsInputError → Job/资产 NEEDS_INPUT，等待用户补充后由 API 重新入队。
+- DeterministicError → Job FAILED + 记录 FAILED + 诊断落库，不自动重试；
+- NeedsInputError → Job/记录 NEEDS_INPUT，等待用户补充后由 API 重新入队。
 
 执行权与崩溃恢复：认领时取得租约并在运行期间由后台心跳续约；Worker 崩溃后租约
 过期，由独立恢复器（app.recovery）回收重投，不依赖 Broker 重投消息恰好到达。
@@ -22,14 +22,13 @@ from billiard.exceptions import SoftTimeLimitExceeded
 from celery import Task
 from sqlalchemy.exc import SQLAlchemyError
 
-from app.assets.enums import AssetStatus
-from app.assets.service import AssetService
 from app.db import create_engine, make_session_factory, session_scope
+from app.imagery.enums import RecordKind, RecordStatus
+from app.imagery.service import ImageryService
 from app.jobs.enums import JobStatus
 from app.jobs.heartbeat import LeaseHeartbeat
 from app.jobs.models import Job
 from app.jobs.service import JobService
-from app.processing.attachment_ingestion import AttachmentIngestion
 from app.processing.common import IngestionContext
 from app.processing.errors import (
     DeterministicError,
@@ -38,7 +37,6 @@ from app.processing.errors import (
     TransientError,
 )
 from app.processing.raster_ingestion import RasterIngestion
-from app.processing.vector_ingestion import VectorIngestion
 from app.settings import get_settings
 from app.uploads.minio import MinioAdapter, MinioError
 from app.worker.celery_app import celery
@@ -99,7 +97,8 @@ def _execute_ingestion(self: Any, job_id: str, runner: Any, label: str) -> None:
 
     ctx = IngestionContext(
         job_id=job_id_int,
-        asset_id=int(payload["asset_id"]),
+        owner_kind=RecordKind(str(payload["owner_kind"])),
+        owner_id=int(payload["owner_id"]),
         source_object_key=str(payload["source_object_key"]),
         source_size_bytes=int(payload["source_size_bytes"]),
         tmp_dir=Path(settings.worker_tmp_dir) / job_id,
@@ -133,12 +132,12 @@ def _execute_ingestion(self: Any, job_id: str, runner: Any, label: str) -> None:
                 detail={"reason": exc.reason, "detail": exc.detail},
             )
             job.last_error = {"code": exc.reason, "detail": exc.detail, "transient": False}
-            assets = AssetService(session)
-            asset = assets.get_asset_by_id(ctx.asset_id)
-            assert asset is not None
-            assets.set_status(
-                asset,
-                AssetStatus.NEEDS_INPUT,
+            imagery = ImageryService(session)
+            record = imagery.get_by_id(ctx.owner_kind, ctx.owner_id)
+            assert record is not None
+            imagery.set_status(
+                record,
+                RecordStatus.NEEDS_INPUT,
                 diagnostics={
                     "reason": exc.reason,
                     "detail": exc.detail,
@@ -150,7 +149,7 @@ def _execute_ingestion(self: Any, job_id: str, runner: Any, label: str) -> None:
     except ProcessingCancelledError:
         # 检查点已把 Job 推进到 CANCELLED；这里只收敛版本状态。
         with session_scope(factory) as session:
-            AssetService(session).mark_cancelled(ctx.asset_id)
+            ImageryService(session).mark_cancelled(ctx.owner_kind, ctx.owner_id)
         logger.info("任务已在处理步骤检查点取消", extra={"job_id": job_id})
         return
     except SoftTimeLimitExceeded:
@@ -167,7 +166,9 @@ def _execute_ingestion(self: Any, job_id: str, runner: Any, label: str) -> None:
                 detail={"code": "TASK_TIMEOUT", "detail": detail, "transient": False},
             )
             job.last_error = {"code": "TASK_TIMEOUT", "detail": detail, "transient": False}
-            AssetService(session).mark_cancelled(ctx.asset_id, reason="TASK_TIMEOUT")
+            ImageryService(session).mark_cancelled(
+                ctx.owner_kind, ctx.owner_id, reason="TASK_TIMEOUT"
+            )
         logger.error("任务达到软时限，已落失败诊断", extra={"job_id": job_id})
         return
     except DeterministicError as exc:
@@ -183,12 +184,12 @@ def _execute_ingestion(self: Any, job_id: str, runner: Any, label: str) -> None:
                 detail={"code": exc.code, "detail": exc.detail, "transient": False},
             )
             job.last_error = {"code": exc.code, "detail": exc.detail, "transient": False}
-            assets = AssetService(session)
-            asset = assets.get_asset_by_id(ctx.asset_id)
-            assert asset is not None
-            assets.set_status(
-                asset,
-                AssetStatus.FAILED,
+            imagery = ImageryService(session)
+            record = imagery.get_by_id(ctx.owner_kind, ctx.owner_id)
+            assert record is not None
+            imagery.set_status(
+                record,
+                RecordStatus.FAILED,
                 diagnostics={"reason": exc.code, "detail": exc.detail},
             )
         logger.error("任务确定性失败", extra={"job_id": job_id, "code": exc.code})
@@ -204,12 +205,12 @@ def _execute_ingestion(self: Any, job_id: str, runner: Any, label: str) -> None:
             event = jobs.schedule_retry(job, detail=detail)
             if event is None:
                 # 重试次数耗尽：schedule_retry 已把 Job 置 FAILED，这里同步版本终态
-                assets = AssetService(session)
-                asset = assets.get_asset_by_id(ctx.asset_id)
-                assert asset is not None
-                assets.set_status(
-                    asset,
-                    AssetStatus.FAILED,
+                imagery = ImageryService(session)
+                record = imagery.get_by_id(ctx.owner_kind, ctx.owner_id)
+                assert record is not None
+                imagery.set_status(
+                    record,
+                    RecordStatus.FAILED,
                     diagnostics={
                         "reason": "TRANSIENT_EXHAUSTED",
                         "detail": f"瞬时错误重试次数耗尽：{exc}",
@@ -246,12 +247,12 @@ def _execute_ingestion(self: Any, job_id: str, runner: Any, label: str) -> None:
                 "detail": detail,
                 "transient": False,
             }
-            assets = AssetService(session)
-            asset = assets.get_asset_by_id(ctx.asset_id)
-            assert asset is not None
-            assets.set_status(
-                asset,
-                AssetStatus.FAILED,
+            imagery = ImageryService(session)
+            record = imagery.get_by_id(ctx.owner_kind, ctx.owner_id)
+            assert record is not None
+            imagery.set_status(
+                record,
+                RecordStatus.FAILED,
                 diagnostics={"reason": "UNEXPECTED_PROCESSING_ERROR", "detail": detail},
             )
         logger.exception("任务发生未分类处理错误，已按确定性失败终止", extra={"job_id": job_id})
@@ -264,12 +265,3 @@ def _execute_ingestion(self: Any, job_id: str, runner: Any, label: str) -> None:
 def ingest_raster(self: Task, job_id: str) -> None:
     _execute_ingestion(self, job_id, RasterIngestion, "栅格")
 
-
-@celery.task(name="processing.ingest_vector", bind=True, ignore_result=True)
-def ingest_vector(self: Task, job_id: str) -> None:
-    _execute_ingestion(self, job_id, VectorIngestion, "矢量")
-
-
-@celery.task(name="processing.ingest_attachment", bind=True, ignore_result=True)
-def ingest_attachment(self: Task, job_id: str) -> None:
-    _execute_ingestion(self, job_id, AttachmentIngestion, "附件")

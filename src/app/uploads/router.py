@@ -45,7 +45,7 @@ def _get_service(
     status_code=201,
     summary="创建上传",
     description=(
-        "提交文件名和字节数。返回分片的临时 PUT 地址和资产编号。"
+        "提交文件名、大小、kind 和 data_source_id。返回分片的临时 PUT 地址和记录编号。"
         "把每一片直接 PUT 到对应地址，不要把文件 POST 到本接口。"
         "全部传完后调用「完成上传」。"
     ),
@@ -60,11 +60,13 @@ def create_session(
         file_name=body.file_name,
         size_bytes=body.size_bytes,
         content_type=body.content_type,
-        asset_type=body.asset_type,
+        kind=body.kind,
+        data_source_id=body.data_source_id,
     )
     return SessionCreatedResponse(
         session_id=session.id,
-        asset_id=session.asset_id,
+        kind=session.owner_kind,
+        record_id=session.owner_id,
         part_urls=[PartUrl(part_number=p["part_number"], url=p["url"]) for p in part_urls],
         expires_in_seconds=request.app.state.settings.presign_expiry_seconds,
     )
@@ -117,7 +119,7 @@ def get_part_url(
     summary="完成上传",
     description=(
         "合并已上传的分片并开始后台处理。"
-        "之后用返回的 asset_id 请求「资产详情」，直到 status 变为 READY、FAILED 或 NEEDS_INPUT。"
+        "之后用返回的 kind 和 record_id 请求详情，直到 READY、FAILED 或 NEEDS_INPUT。"
         "重复调用会返回同一结果，不会再传一遍。"
     ),
     response_model=SessionCompletedResponse,
@@ -133,7 +135,7 @@ def complete_session(
 @router.post(
     "/sessions/{session_id}/abort",
     summary="中止上传",
-    description="取消这次上传。对应资产会记为失败。已经完成的上传不能中止。",
+    description="取消这次上传。对应记录会记为失败。已经完成的上传不能中止。",
     response_model=SessionAbortResponse,
 )
 def abort_session(

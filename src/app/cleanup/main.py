@@ -9,9 +9,9 @@ from types import FrameType
 
 from sqlalchemy.exc import SQLAlchemyError
 
-from app.assets.lifecycle import AssetLifecycleService, ObjectCleanupService
 from app.context import now_utc
 from app.db import create_engine, make_session_factory, session_scope
+from app.imagery.lifecycle import ImageryLifecycleService, ObjectCleanupService
 from app.logging import configure_logging
 from app.model_registry import *  # noqa: F403 迁移/外键目标模型全部注册
 from app.settings import get_settings
@@ -50,22 +50,24 @@ def main() -> None:
             now = now_utc()
             try:
                 with session_scope(factory) as session:
-                    due_ids = AssetLifecycleService(session).due_asset_ids(
+                    due = ImageryLifecycleService(session).due_records(
                         now=now, limit=settings.cleanup_batch_size
                     )
-                for asset_id in due_ids:
+                for kind, record_id in due:
                     try:
                         with session_scope(factory) as session:
-                            if AssetLifecycleService(session).purge_asset(asset_id, now=now):
+                            if ImageryLifecycleService(session).purge_record(
+                                kind, record_id, now=now
+                            ):
                                 did_work = True
                     except Exception as exc:
                         logger.exception(
-                            "过期资产清理失败，将退避重试",
-                            extra={"asset_id": str(asset_id)},
+                            "过期影像清理失败，将退避重试",
+                            extra={"kind": kind.value, "record_id": str(record_id)},
                         )
                         with session_scope(factory) as session:
-                            AssetLifecycleService(session).record_purge_failure(
-                                asset_id, str(exc), now=now
+                            ImageryLifecycleService(session).record_purge_failure(
+                                kind, record_id, str(exc), now=now
                             )
 
                 with session_scope(factory) as session:

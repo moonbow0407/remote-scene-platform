@@ -22,10 +22,10 @@ from app.api.metrics import (
     WORKER_CONSUMERS,
     WORKER_UTILIZATION,
 )
-from app.assets.enums import ObjectCleanupStatus
-from app.assets.models import DataAsset, ObjectCleanupTask
 from app.context import now_utc
 from app.db import session_scope
+from app.imagery.enums import ObjectCleanupStatus
+from app.imagery.models import ObjectCleanupTask, SatelliteData, UavData
 from app.jobs.enums import JobStatus, OutboxStatus
 from app.jobs.models import Job, OutboxEvent
 from app.settings import Settings
@@ -85,9 +85,9 @@ def refresh_database_metrics(factory: sessionmaker[Session]) -> None:
                 sum(durations) / len(durations) if durations else 0
             )
             JOB_DURATION.labels(aggregation="max").set(max(durations, default=0))
-            STORAGE_BYTES.labels(kind="original_blob").set(
-                int(session.scalar(sa.select(sa.func.sum(DataAsset.size_bytes))) or 0)
-            )
+            sat_bytes = int(session.scalar(sa.select(sa.func.sum(SatelliteData.size_bytes))) or 0)
+            uav_bytes = int(session.scalar(sa.select(sa.func.sum(UavData.size_bytes))) or 0)
+            STORAGE_BYTES.labels(kind="original_blob").set(sat_bytes + uav_bytes)
             STORAGE_BYTES.labels(kind="derived_artifact").set(0)
             CLEANUP_BACKLOG.set(
                 int(

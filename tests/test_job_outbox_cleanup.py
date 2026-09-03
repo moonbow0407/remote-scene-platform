@@ -23,10 +23,11 @@ from sqlalchemy.pool import StaticPool
 
 import app.monitoring.execution as monitoring_execution
 import app.processing.tasks as processing_tasks
-from app.assets.enums import AssetStatus, AssetType
-from app.assets.lifecycle import AssetLifecycleService
-from app.assets.models import DataAsset
+from app.data_sources.models import DataSource
 from app.db import Base, session_scope
+from app.imagery.enums import RecordKind, RecordStatus
+from app.imagery.lifecycle import ImageryLifecycleService
+from app.imagery.models import SatelliteData
 from app.jobs.enums import JobStatus, JobType
 from app.jobs.models import Job, JobEvent, OutboxEvent
 from app.jobs.service import JobService, OutboxRepository
@@ -40,6 +41,7 @@ from app.monitoring.enums import (
 from app.monitoring.execution import execute_monitoring_run
 from app.monitoring.models import MonitoringOccurrence, MonitoringPlan, MonitoringRun
 from app.monitoring.service import MonitoringService
+from app.uploads.models import UploadSession  # noqa: F401
 
 
 @compiles(JSONB, "sqlite")
@@ -53,9 +55,16 @@ def _geometry_sqlite(_type: Geometry, compiler: object, **_kw: object) -> str:
 
 
 _JOB_TABLES = ("job", "job_event", "outbox_event")
-_ASSET_TABLES = ("data_asset", "object_cleanup_task", *_JOB_TABLES)
+_ASSET_TABLES = (
+    "data_source",
+    "satellite_data",
+    "object_cleanup_task",
+    "upload_session",
+    *_JOB_TABLES,
+)
 _PLAN_TABLES = (
-    "data_asset",
+    "data_source",
+    "satellite_data",
     *_JOB_TABLES,
     "monitoring_plan",
     "monitoring_plan_parameter",
@@ -122,13 +131,24 @@ def _add_job(
     session: Session,
     *,
     job_type: JobType = JobType.RASTER_INGESTION,
-    asset_id: int | None = 1,
+    owner_kind: str | None = "SATELLITE",
+    owner_id: int | None = 1,
     payload: dict[str, Any] | None = None,
 ) -> Job:
+    if job_type is JobType.MONITORING_RUN:
+        owner_kind = None
+        owner_id = None
     job, _event = JobService(session).create_job_with_outbox(
         job_type=job_type,
-        payload=payload or {"asset_id": "1", "source_object_key": "k", "source_size_bytes": 8},
-        asset_id=asset_id,
+        payload=payload
+        or {
+            "owner_kind": "SATELLITE",
+            "owner_id": "1",
+            "source_object_key": "k",
+            "source_size_bytes": 8,
+        },
+        owner_kind=owner_kind,
+        owner_id=owner_id,
     )
     return job
 
@@ -150,12 +170,22 @@ def test_delete_jobs_and_outbox_removes_both(job_factory: sessionmaker[Session])
     with session_scope(job_factory) as session:
         keep = _add_job(
             session,
-            payload={"asset_id": "1", "source_object_key": "a", "source_size_bytes": 1},
+            payload={
+                "owner_kind": "SATELLITE",
+                "owner_id": "1",
+                "source_object_key": "a",
+                "source_size_bytes": 1,
+            },
         )
         drop = _add_job(
             session,
-            asset_id=2,
-            payload={"asset_id": "2", "source_object_key": "b", "source_size_bytes": 1},
+            owner_id=2,
+            payload={
+                "owner_kind": "SATELLITE",
+                "owner_id": "2",
+                "source_object_key": "b",
+                "source_size_bytes": 1,
+            },
         )
         keep_id, drop_id = keep.id, drop.id
         JobService(session).delete_jobs_and_outbox([drop_id])
@@ -224,7 +254,6 @@ def test_monitoring_missing_run_fails_job_and_acks(
         job = _add_job(
             session,
             job_type=JobType.MONITORING_RUN,
-            asset_id=None,
             payload={"run_id": "51", "plan_id": "1", "input_count": 0},
         )
         job_id = job.id
@@ -243,38 +272,44 @@ def test_purge_asset_removes_job_and_outbox(
     asset_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        "app.monitoring.service.MonitoringService.asset_has_snapshot_references",
-        lambda self, asset_id: False,
+        "app.monitoring.service.MonitoringService.record_has_snapshot_references",
+        lambda self, owner_kind, record_id: False,
     )
     now = datetime(2026, 8, 30, tzinfo=UTC)
     with session_scope(asset_factory) as session:
-        asset = DataAsset(
+        source = DataSource(code="000114", name="哨兵二号", kind=RecordKind.SATELLITE)
+        session.add(source)
+        session.flush()
+        record = SatelliteData(
             name="待清理",
-            asset_type=AssetType.ATTACHMENT,
-            status=AssetStatus.READY,
-            original_file_name="a.bin",
+            data_source_id=source.id,
+            status=RecordStatus.READY,
+            original_file_name="a.tif",
             size_bytes=4,
-            original_object_key="original/a.bin",
+            original_object_key="original/a.tif",
         )
-        session.add(asset)
+        session.add(record)
         session.flush()
         job = _add_job(
             session,
-            asset_id=asset.id,
+            owner_id=record.id,
             payload={
-                "asset_id": str(asset.id),
-                "source_object_key": "original/a.bin",
+                "owner_kind": "SATELLITE",
+                "owner_id": str(record.id),
+                "source_object_key": "original/a.tif",
                 "source_size_bytes": 4,
             },
         )
-        asset_id, job_id = asset.id, job.id
-        AssetLifecycleService(session).soft_delete(
-            asset_id, retention_days=7, now=now - timedelta(days=8)
+        record_id, job_id = record.id, job.id
+        ImageryLifecycleService(session).soft_delete(
+            RecordKind.SATELLITE, record_id, retention_days=7, now=now - timedelta(days=8)
         )
 
     with session_scope(asset_factory) as session:
-        assert AssetLifecycleService(session).purge_asset(asset_id, now=now)
-        assert session.get(DataAsset, asset_id) is None
+        assert ImageryLifecycleService(session).purge_record(
+            RecordKind.SATELLITE, record_id, now=now
+        )
+        assert session.get(SatelliteData, record_id) is None
         assert session.get(Job, job_id) is None
         assert (
             session.scalar(
@@ -296,6 +331,7 @@ def test_delete_plan_removes_job_and_outbox(plan_factory: sessionmaker[Session])
             schedule_type=ScheduleType.INTERVAL,
             schedule_expression="P1D",
             timezone="UTC",
+            precision="00",
         )
         session.add(plan)
         session.flush()
@@ -310,7 +346,6 @@ def test_delete_plan_removes_job_and_outbox(plan_factory: sessionmaker[Session])
         job = _add_job(
             session,
             job_type=JobType.MONITORING_RUN,
-            asset_id=None,
             payload={"run_id": "0", "plan_id": str(plan.id), "input_count": 0},
         )
         run = MonitoringRun(

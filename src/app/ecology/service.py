@@ -14,10 +14,10 @@ import sqlalchemy as sa
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.catalogs.service import CatalogService
-from app.ecology.enums import EcologicalParameterStatus
+from app.data_sources.service import DataSourceService
+from app.ecology.enums import EcologicalParameterStatus, Precision
 from app.ecology.majors import MAJORS, major_code_of, resolve_major_name
-from app.ecology.models import EcologicalParameter, EcologicalParameterResourceMapping
+from app.ecology.models import EcologicalParameter, EcologicalParameterDataSource
 from app.ecology.schemas import (
     EcologicalParameterCreate,
     EcologicalParameterLeaf,
@@ -186,13 +186,13 @@ class EcologyService:
         row = self.get_parameter_required(parameter_id)
         mapping_count = self._session.scalar(
             sa.select(sa.func.count())
-            .select_from(EcologicalParameterResourceMapping)
-            .where(EcologicalParameterResourceMapping.ecological_parameter_id == parameter_id)
+            .select_from(EcologicalParameterDataSource)
+            .where(EcologicalParameterDataSource.ecological_parameter_id == parameter_id)
         )
         if int(mapping_count or 0) > 0:
             raise conflict(
                 code="ECOLOGICAL_PARAMETER_IN_USE",
-                detail=f"生态参数 {parameter_id} 仍被资源映射引用，禁止删除",
+                detail=f"生态参数 {parameter_id} 仍被数据源关系引用，禁止删除",
             )
         self._session.delete(row)
         try:
@@ -247,13 +247,13 @@ class EcologyService:
 
     # ----- Mappings -----
 
-    def get_mapping(self, mapping_id: int) -> EcologicalParameterResourceMapping | None:
-        return self._session.get(EcologicalParameterResourceMapping, mapping_id)
+    def get_mapping(self, mapping_id: int) -> EcologicalParameterDataSource | None:
+        return self._session.get(EcologicalParameterDataSource, mapping_id)
 
-    def get_mapping_required(self, mapping_id: int) -> EcologicalParameterResourceMapping:
+    def get_mapping_required(self, mapping_id: int) -> EcologicalParameterDataSource:
         row = self.get_mapping(mapping_id)
         if row is None:
-            raise not_found("生态资源映射", mapping_id)
+            raise not_found("参量数据源关系", mapping_id)
         return row
 
     def list_mappings(
@@ -261,115 +261,116 @@ class EcologyService:
         params: PageParams,
         *,
         ecological_parameter_id: int | None = None,
-        category_id: int | None = None,
-    ) -> Page[EcologicalParameterResourceMapping]:
-        stmt = sa.select(EcologicalParameterResourceMapping)
-        count_stmt = sa.select(sa.func.count()).select_from(EcologicalParameterResourceMapping)
+        data_source_id: int | None = None,
+        precision: Precision | None = None,
+    ) -> Page[EcologicalParameterDataSource]:
+        stmt = sa.select(EcologicalParameterDataSource)
+        count_stmt = sa.select(sa.func.count()).select_from(EcologicalParameterDataSource)
         if ecological_parameter_id is not None:
             stmt = stmt.where(
-                EcologicalParameterResourceMapping.ecological_parameter_id
-                == ecological_parameter_id
+                EcologicalParameterDataSource.ecological_parameter_id == ecological_parameter_id
             )
             count_stmt = count_stmt.where(
-                EcologicalParameterResourceMapping.ecological_parameter_id
-                == ecological_parameter_id
+                EcologicalParameterDataSource.ecological_parameter_id == ecological_parameter_id
             )
-        if category_id is not None:
-            stmt = stmt.where(EcologicalParameterResourceMapping.category_id == category_id)
+        if data_source_id is not None:
+            stmt = stmt.where(EcologicalParameterDataSource.data_source_id == data_source_id)
             count_stmt = count_stmt.where(
-                EcologicalParameterResourceMapping.category_id == category_id
+                EcologicalParameterDataSource.data_source_id == data_source_id
             )
+        if precision is not None:
+            stmt = stmt.where(EcologicalParameterDataSource.precision == precision)
+            count_stmt = count_stmt.where(EcologicalParameterDataSource.precision == precision)
         total = int(self._session.scalar(count_stmt) or 0)
         rows = list(
             self._session.scalars(
-                stmt.order_by(EcologicalParameterResourceMapping.created_at.desc())
+                stmt.order_by(EcologicalParameterDataSource.created_at.desc())
                 .offset(params.offset)
                 .limit(params.limit)
             )
         )
         return Page.build(rows, total, params)
 
-    def create_mapping(self, body: MappingCreate) -> EcologicalParameterResourceMapping:
-        """单条创建：已存在则幂等返回已有行（与批量语义一致）。"""
+    def create_mapping(self, body: MappingCreate) -> EcologicalParameterDataSource:
         result = self.create_mappings_batch(MappingBatchCreate(items=[body]))
         if result.created:
             return self.get_mapping_required(result.created[0].id)
         return self.get_mapping_required(result.existing[0].id)
 
-    def update_mapping(
-        self, mapping_id: int, body: MappingCreate
-    ) -> EcologicalParameterResourceMapping:
-        """原子替换映射两端；目标组合已由其他行占用时返回稳定冲突。"""
+    def update_mapping(self, mapping_id: int, body: MappingCreate) -> EcologicalParameterDataSource:
         row = self.get_mapping_required(mapping_id)
         self.get_parameter_required(body.ecological_parameter_id)
-        CatalogService(self._session).get_required(body.category_id)
+        DataSourceService(self._session).get_required(body.data_source_id)
         duplicate = self._session.scalar(
-            sa.select(EcologicalParameterResourceMapping.id).where(
-                EcologicalParameterResourceMapping.id != mapping_id,
-                EcologicalParameterResourceMapping.ecological_parameter_id
+            sa.select(EcologicalParameterDataSource.id).where(
+                EcologicalParameterDataSource.id != mapping_id,
+                EcologicalParameterDataSource.ecological_parameter_id
                 == body.ecological_parameter_id,
-                EcologicalParameterResourceMapping.category_id == body.category_id,
+                EcologicalParameterDataSource.data_source_id == body.data_source_id,
+                EcologicalParameterDataSource.precision == body.precision,
             )
         )
         if duplicate is not None:
             raise conflict(
                 code="ECOLOGY_MAPPING_CONFLICT",
-                detail="目标生态参数与分类的映射已存在",
+                detail="目标生态参数、数据源与精度的关系已存在",
             )
         row.ecological_parameter_id = body.ecological_parameter_id
-        row.category_id = body.category_id
+        row.data_source_id = body.data_source_id
+        row.precision = body.precision
         try:
             self._session.flush()
         except IntegrityError as exc:
             raise conflict(
                 code="ECOLOGY_MAPPING_CONFLICT",
-                detail="目标生态参数与资源目录的映射已存在",
+                detail="目标生态参数、数据源与精度的关系已存在",
             ) from exc
         return row
 
     def create_mappings_batch(self, body: MappingBatchCreate) -> MappingBatchResponse:
-        # 空输入安全：直接返回空结果
         if not body.items:
             return MappingBatchResponse(created=[], existing=[], created_count=0, existing_count=0)
 
-        # 输入去重（保持首次出现顺序）
-        unique_pairs: list[tuple[int, int]] = []
-        seen_pairs: set[tuple[int, int]] = set()
+        unique_keys: list[tuple[int, int, Precision]] = []
+        seen: set[tuple[int, int, Precision]] = set()
         for item in body.items:
-            pair = (item.ecological_parameter_id, item.category_id)
-            if pair in seen_pairs:
+            key = (item.ecological_parameter_id, item.data_source_id, item.precision)
+            if key in seen:
                 continue
-            seen_pairs.add(pair)
-            unique_pairs.append(pair)
+            seen.add(key)
+            unique_keys.append(key)
 
-        catalog_service = CatalogService(self._session)
-        for parameter_id, resource_id in unique_pairs:
+        sources = DataSourceService(self._session)
+        for parameter_id, source_id, _precision in unique_keys:
             self.get_parameter_required(parameter_id)
-            catalog_service.get_required(resource_id)
+            sources.get_required(source_id)
 
-        pair_filters = [
+        key_filters = [
             sa.and_(
-                EcologicalParameterResourceMapping.ecological_parameter_id == parameter_id,
-                EcologicalParameterResourceMapping.category_id == resource_id,
+                EcologicalParameterDataSource.ecological_parameter_id == parameter_id,
+                EcologicalParameterDataSource.data_source_id == source_id,
+                EcologicalParameterDataSource.precision == precision,
             )
-            for parameter_id, resource_id in unique_pairs
+            for parameter_id, source_id, precision in unique_keys
         ]
         existing_rows = list(
             self._session.scalars(
-                sa.select(EcologicalParameterResourceMapping).where(sa.or_(*pair_filters))
+                sa.select(EcologicalParameterDataSource).where(sa.or_(*key_filters))
             )
         )
         existing_keys = {
-            (row.ecological_parameter_id, row.category_id): row for row in existing_rows
+            (row.ecological_parameter_id, row.data_source_id, row.precision): row
+            for row in existing_rows
         }
 
-        created_rows: list[EcologicalParameterResourceMapping] = []
-        for parameter_id, resource_id in unique_pairs:
-            if (parameter_id, resource_id) in existing_keys:
+        created_rows: list[EcologicalParameterDataSource] = []
+        for parameter_id, source_id, precision in unique_keys:
+            if (parameter_id, source_id, precision) in existing_keys:
                 continue
-            row = EcologicalParameterResourceMapping(
+            row = EcologicalParameterDataSource(
                 ecological_parameter_id=parameter_id,
-                category_id=resource_id,
+                data_source_id=source_id,
+                precision=precision,
             )
             self._session.add(row)
             created_rows.append(row)
@@ -377,10 +378,9 @@ class EcologyService:
         try:
             self._session.flush()
         except IntegrityError as exc:
-            # 并发下可能撞唯一约束；事务由请求边界回滚，客户端可重试幂等批量
             raise conflict(
                 code="ECOLOGY_MAPPING_CONFLICT",
-                detail="映射写入冲突，请重试；已存在关系应使用幂等批量接口",
+                detail="关系写入冲突，请重试；已存在关系应使用幂等批量接口",
             ) from exc
 
         existing_out = [
@@ -396,8 +396,9 @@ class EcologyService:
             existing_count=len(existing_out),
         )
 
-    def mapped_category_ids(self, parameter_ids: list[int]) -> list[int]:
-        """返回生态参数集合映射到的分类主键；空映射返回空列表。"""
+    def mapped_data_source_ids(
+        self, parameter_ids: list[int], precision: Precision
+    ) -> list[int]:
         unique: list[int] = []
         seen: set[int] = set()
         for parameter_id in parameter_ids:
@@ -410,8 +411,9 @@ class EcologyService:
             return []
         rows = list(
             self._session.scalars(
-                sa.select(EcologicalParameterResourceMapping.category_id).where(
-                    EcologicalParameterResourceMapping.ecological_parameter_id.in_(unique)
+                sa.select(EcologicalParameterDataSource.data_source_id).where(
+                    EcologicalParameterDataSource.ecological_parameter_id.in_(unique),
+                    EcologicalParameterDataSource.precision == precision,
                 )
             )
         )
@@ -421,3 +423,4 @@ class EcologyService:
         row = self.get_mapping_required(mapping_id)
         self._session.delete(row)
         self._session.flush()
+

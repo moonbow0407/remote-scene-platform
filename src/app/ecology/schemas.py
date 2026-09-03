@@ -4,7 +4,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.ecology.enums import EcologicalParameterStatus
+from app.ecology.enums import EcologicalParameterStatus, Precision
 from app.ecology.majors import ABBREV_PATTERN, ITEM_CODE_PATTERN
 
 
@@ -199,41 +199,43 @@ class MajorResponse(BaseModel):
 
 
 class MappingCreate(BaseModel):
-    """把一个生态参数对应到一个分类。"""
+    """把一个生态细项对应到一个产品型号和精度。"""
 
-    model_config = ConfigDict(title="创建生态映射")
+    model_config = ConfigDict(title="创建参量数据源关系")
 
-    ecological_parameter_id: int = Field(description="生态参数编号")
-    category_id: int = Field(description="分类编号")
+    ecological_parameter_id: int = Field(description="生态参数细项编号")
+    data_source_id: int = Field(description="数据源编号")
+    precision: Precision = Field(description="00 低精度 / 01 高精度")
 
 
 class MappingBatchCreate(BaseModel):
-    """一次提交多条对应关系。已经存在的不会报错，会在 existing 里原样返回。"""
+    """一次提交多条关系。已经存在的不会报错，会在 existing 里原样返回。"""
 
-    model_config = ConfigDict(title="批量创建生态映射")
+    model_config = ConfigDict(title="批量创建参量数据源关系")
 
     items: list[MappingCreate] = Field(
-        default_factory=list, description="要创建的对应关系；可以是空数组"
+        default_factory=list, description="要创建的关系；可以是空数组"
     )
 
 
 class MappingResponse(BaseModel):
-    """一条生态参数和分类的对应关系。"""
+    """一条生态细项和产品型号的对应关系。"""
 
-    model_config = ConfigDict(title="生态映射")
+    model_config = ConfigDict(title="参量数据源关系")
 
-    id: int = Field(description="这条对应关系的编号")
-    ecological_parameter_id: int = Field(description="生态参数编号")
-    category_id: int = Field(description="分类编号")
+    id: int = Field(description="这条关系的编号")
+    ecological_parameter_id: int = Field(description="生态参数细项编号")
+    data_source_id: int = Field(description="数据源编号")
+    precision: Precision = Field(description="00 低精度 / 01 高精度")
     created_at: datetime = Field(description="创建时间，UTC 且带时区")
 
 
 class MappingBatchResponse(BaseModel):
     """批量创建的结果。新的在 created，本来就有的在 existing。"""
 
-    model_config = ConfigDict(title="批量映射结果")
+    model_config = ConfigDict(title="批量关系结果")
 
-    created: list[MappingResponse] = Field(description="这次新建立的对应关系")
-    existing: list[MappingResponse] = Field(description="请求里已经存在、原样返回的对应关系")
+    created: list[MappingResponse] = Field(description="这次新建立的关系")
+    existing: list[MappingResponse] = Field(description="请求里已经存在、原样返回的关系")
     created_count: int = Field(description="新建立的条数")
     existing_count: int = Field(description="已经存在的条数")

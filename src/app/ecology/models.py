@@ -1,10 +1,10 @@
-"""生态参数与分类映射持久化模型。
+"""生态参数与数据源关系持久化模型。
 
 不变量：
 - 一行一条细项；大类是字段，没有 parent_id；
 - `code` 为四位细项编号，`abbrev` 为英文缩写，二者均全局唯一；
-- 与分类通过显式多对多映射表关联，禁止 code/名称软引用；
-- `(ecological_parameter_id, category_id)` 唯一。
+- 与产品型号通过显式关系表关联，禁止 code/名称软引用；
+- `(ecological_parameter_id, data_source_id, precision)` 唯一。
 """
 
 from datetime import datetime
@@ -15,11 +15,11 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.context import now_utc
 from app.db import Base, TimestampMixin
-from app.ecology.enums import EcologicalParameterStatus
+from app.ecology.enums import EcologicalParameterStatus, Precision
 
 
 class EcologicalParameter(Base, TimestampMixin):
-    """生态参量细项；监测与资产过滤按 id 引用。"""
+    """生态参量细项；监测与检索按 id 引用。"""
 
     __tablename__ = "ecological_parameter"
 
@@ -51,10 +51,10 @@ class EcologicalParameter(Base, TimestampMixin):
     )
 
 
-class EcologicalParameterResourceMapping(Base):
-    """生态参数 ↔ 分类 显式多对多。"""
+class EcologicalParameterDataSource(Base):
+    """生态细项 ↔ 产品型号 ↔ 精度。"""
 
-    __tablename__ = "ecological_parameter_resource_mapping"
+    __tablename__ = "ecological_parameter_data_source"
 
     id: Mapped[int] = mapped_column(sa.Integer, primary_key=True, autoincrement=True)
     ecological_parameter_id: Mapped[int] = mapped_column(
@@ -63,11 +63,16 @@ class EcologicalParameterResourceMapping(Base):
         nullable=False,
         comment="生态参数主键",
     )
-    category_id: Mapped[int] = mapped_column(
+    data_source_id: Mapped[int] = mapped_column(
         sa.Integer,
-        ForeignKey("category.id", ondelete="RESTRICT"),
+        ForeignKey("data_source.id", ondelete="RESTRICT"),
         nullable=False,
-        comment="分类主键",
+        comment="产品型号主键",
+    )
+    precision: Mapped[Precision] = mapped_column(
+        sa.Enum(Precision, native_enum=False, length=8),
+        nullable=False,
+        comment="00 低精度 / 01 高精度",
     )
     created_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True), default=now_utc, server_default=sa.func.now(), nullable=False
@@ -76,9 +81,10 @@ class EcologicalParameterResourceMapping(Base):
     __table_args__ = (
         UniqueConstraint(
             "ecological_parameter_id",
-            "category_id",
-            name="uq_eco_param_resource_mapping",
+            "data_source_id",
+            "precision",
+            name="uq_eco_param_data_source",
         ),
-        sa.Index("ix_eco_mapping_parameter_id", "ecological_parameter_id"),
-        sa.Index("ix_eco_mapping_resource_id", "category_id"),
+        sa.Index("ix_eco_ds_mapping_parameter_id", "ecological_parameter_id"),
+        sa.Index("ix_eco_ds_mapping_data_source_id", "data_source_id"),
     )

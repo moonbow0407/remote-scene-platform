@@ -14,11 +14,11 @@ from typing import Any
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
-from app.assets.enums import AssetStatus, AssetType
-from app.assets.service import AssetService
 from app.context import now_utc
 from app.errors import conflict, not_found, validation_error
 from app.ids import new_uuid7
+from app.imagery.enums import RecordKind, RecordStatus
+from app.imagery.service import ImageryService
 from app.jobs.enums import JobType
 from app.jobs.service import JobService
 from app.settings import Settings
@@ -30,7 +30,6 @@ logger = logging.getLogger(__name__)
 _DEFAULT_PART_SIZE = 16 * 1024 * 1024
 _MAX_PARTS = 10000
 _RASTER_EXT = {".tif", ".tiff", ".gtiff", ".geotiff"}
-_VECTOR_EXT = {".zip", ".geojson", ".gpkg", ".shp"}
 
 
 def compute_part_count(size_bytes: int) -> int:
@@ -39,15 +38,10 @@ def compute_part_count(size_bytes: int) -> int:
     return min(math.ceil(size_bytes / _DEFAULT_PART_SIZE), _MAX_PARTS)
 
 
-def infer_asset_type(file_name: str) -> AssetType | None:
+def _require_tiff(file_name: str) -> None:
     ext = Path(file_name).suffix.lower()
-    if ext in _RASTER_EXT:
-        return AssetType.RASTER
-    if ext in _VECTOR_EXT:
-        return AssetType.VECTOR
-    if ext:
-        return AssetType.ATTACHMENT
-    return None
+    if ext not in _RASTER_EXT:
+        raise validation_error("只接受 GeoTIFF（.tif / .tiff）")
 
 
 def _sanitize_file_name(raw: str) -> str:
@@ -77,20 +71,12 @@ def _validate_uploaded_parts(
         )
 
 
-def _job_type_for(asset_type: AssetType) -> JobType:
-    return {
-        AssetType.RASTER: JobType.RASTER_INGESTION,
-        AssetType.VECTOR: JobType.VECTOR_INGESTION,
-        AssetType.ATTACHMENT: JobType.ATTACHMENT_INGESTION,
-    }[asset_type]
-
-
 class UploadService:
     def __init__(self, session: Session, minio: MinioAdapter, settings: Settings) -> None:
         self._session = session
         self._minio = minio
         self._settings = settings
-        self._assets = AssetService(session)
+        self._imagery = ImageryService(session)
         self._jobs = JobService(session)
 
     def create_session(
@@ -99,20 +85,17 @@ class UploadService:
         file_name: str,
         size_bytes: int,
         content_type: str | None,
-        asset_type: AssetType | None,
+        kind: RecordKind,
+        data_source_id: int,
     ) -> tuple[UploadSession, list[dict[str, Any]]]:
         safe_name = _sanitize_file_name(file_name)
-        inferred = infer_asset_type(safe_name)
-        resolved_type = asset_type or inferred
-        if resolved_type is None:
-            raise validation_error("无法从文件名判断类型，请显式传入 asset_type")
-        if resolved_type not in (AssetType.RASTER, AssetType.VECTOR, AssetType.ATTACHMENT):
-            raise validation_error(f"资产类型 {resolved_type.value} 不受支持")
+        _require_tiff(safe_name)
         part_count = compute_part_count(size_bytes)
         object_key = f"uploads/{new_uuid7()}/{safe_name}"
-        asset = self._assets.create_asset(
+        record = self._imagery.create_record(
+            kind=kind,
             name=safe_name,
-            asset_type=resolved_type,
+            data_source_id=data_source_id,
             original_file_name=safe_name,
             size_bytes=size_bytes,
             original_object_key=object_key,
@@ -120,7 +103,8 @@ class UploadService:
         upload_id = self._minio.create_multipart_upload(key=object_key, content_type=content_type)
         try:
             session = UploadSession(
-                asset_id=asset.id,
+                owner_kind=kind.value,
+                owner_id=record.id,
                 status=UploadSessionStatus.PENDING,
                 minio_upload_id=upload_id,
                 object_key=object_key,
@@ -188,7 +172,11 @@ class UploadService:
     def complete_session(self, session_id: int) -> dict[str, Any]:
         session = self._lock_session(session_id)
         if session.status is UploadSessionStatus.COMPLETED:
-            return {"session_id": session.id, "asset_id": session.asset_id}
+            return {
+                "session_id": session.id,
+                "kind": session.owner_kind,
+                "record_id": session.owner_id,
+            }
         if session.status is UploadSessionStatus.ABORTED:
             raise conflict(
                 code="UPLOAD_SESSION_ABORTED", detail=f"上传会话 {session_id} 已中止，不能完成"
@@ -227,15 +215,18 @@ class UploadService:
                 ),
             )
 
-        asset = self._assets.get_asset_required(session.asset_id)
-        asset.size_bytes = int(existing_object["size"])
-        asset.original_object_key = session.object_key
-        self._assets.set_status(asset, AssetStatus.VALIDATING)
+        kind = RecordKind(session.owner_kind)
+        record = self._imagery.get_required(kind, session.owner_id)
+        record.size_bytes = int(existing_object["size"])
+        record.original_object_key = session.object_key
+        self._imagery.set_status(record, RecordStatus.VALIDATING)
         self._jobs.create_job_with_outbox(
-            job_type=_job_type_for(asset.asset_type),
-            asset_id=asset.id,
+            job_type=JobType.RASTER_INGESTION,
+            owner_kind=kind.value,
+            owner_id=record.id,
             payload={
-                "asset_id": str(asset.id),
+                "owner_kind": kind.value,
+                "owner_id": str(record.id),
                 "upload_session_id": str(session.id),
                 "source_object_key": session.object_key,
                 "file_name": session.file_name,
@@ -245,7 +236,11 @@ class UploadService:
         session.status = UploadSessionStatus.COMPLETED
         session.completed_at = now_utc()
         self._session.flush()
-        return {"session_id": session.id, "asset_id": session.asset_id}
+        return {
+            "session_id": session.id,
+            "kind": session.owner_kind,
+            "record_id": session.owner_id,
+        }
 
     def abort_session(self, session_id: int) -> UploadSession:
         session = self._lock_session(session_id)
@@ -259,11 +254,12 @@ class UploadService:
             key=session.object_key, upload_id=session.minio_upload_id
         )
         session.status = UploadSessionStatus.ABORTED
-        asset = self._assets.get_asset_by_id(session.asset_id)
-        if asset is not None and asset.status is AssetStatus.UPLOADING:
-            self._assets.set_status(
-                asset,
-                AssetStatus.FAILED,
+        kind = RecordKind(session.owner_kind)
+        record = self._imagery.get_by_id(kind, session.owner_id)
+        if record is not None and record.status is RecordStatus.UPLOADING:
+            self._imagery.set_status(
+                record,
+                RecordStatus.FAILED,
                 diagnostics={"reason": "UPLOAD_ABORTED", "detail": "上传已中止"},
             )
         self._session.flush()
